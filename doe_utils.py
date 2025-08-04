@@ -16,6 +16,10 @@ from collections import defaultdict
 from scipy.spatial.distance import hamming
 import itertools
 
+AMINO_ACIDS = list(IUPACData.protein_letters)
+
+
+
 def hamming_dist(seq1, seq2): 
     """
     compute hamming distance (number of mutations) for same length sequences 
@@ -36,17 +40,11 @@ def get_n_choose_m_indices(n, m):
     """
     if not (0 <= m <= n):
         raise ValueError("m must be between 0 and n (inclusive).")
-
     # Generate indices from 0 to n-1
     indices = range(n)
-
     # Use itertools.combinations to get all combinations of m indices
     combinations_iterator = itertools.combinations(indices, m)
-
-    # Convert the iterator to a list of tuples
     return list(combinations_iterator)
-
-
 
 
 class SOLD: 
