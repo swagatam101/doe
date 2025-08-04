@@ -1,2 +1,7 @@
-.ipynb_checkpoints
-__pycache__
+# Python bytecode files
+__pycache__/
+*.pyc
+*.pyo
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
