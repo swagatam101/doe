@@ -9,12 +9,12 @@ Here "model complexity" is deifined by the number of "parameters" in the ground-
 
 There is also experimental design---the balance between "exploitation" and "exploration". For example, a large number of positions mutated in the protein leads to higher exploration, too conservative design leads to only "exploitation" of what's roughly already known. 
 
-Model complexity set how difficult it is to learn the "biology". A robust method assumes high model complexity so that if the biological reality is simpler, the tested algorithms will work even better than expected---because experiments are expensive and simulation is cheap. 
+Model complexity sets how difficult it is to learn the "biology". A robust method assumes high model complexity so that if the biological reality is simpler, the tested algorithms will work even better than expected---because experiments are expensive and simulation is cheap. 
 
 
 ## Description
 
-SOLD matrix is used a a common framekwork---deep mutational scan fits in the same framework. Since I am building the simulator only on the individual and pairwise (epistatic) effects of mutations   
+SOLD matrix is used a common framekwork---deep mutational scan fits in the same framework. Since I am building the simulator only on the individual and pairwise (epistatic) effects of mutations, diffrent length proteins multiple-sequence-aligned can also be captured in the simulation.   
 
 ## Getting Started
 
