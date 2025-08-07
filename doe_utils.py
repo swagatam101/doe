@@ -226,4 +226,56 @@ class sequence_encoder:
             pairwise_codes.append(pairwise)
         return independent_codes, pairwise_codes
 
+#######################################################################################################
+
+class create_mixture: 
+    """
+    Generates synthetic approximate "sparse" signal---this simply creates a mixture of distributions, one is close to zero (so, irrelevant and noise, so is Gaussian)
+    and the other is any other distribution that is the "relevant" signal 
+    Args: 
+        rho: sparsity fraction for the postive and negative components of weights 
+        sparse_pdf_name: any pdf function from scipy.stats, pass name as string
+        noise_sigma: std. of zero centered noise 
+        sparse_params: the params for the sparse signal pdf 
+        
+    Returns: 
+        sparse signal pdf method 
+        sprase signal rvs method to draw samples 
+    """
+    def __init__(self, rho = [0.4, 0.2], sparse_pdf_names = ['norm', 'norm'], noise_sigma = 0.02, sparse_params = [{'loc': 0.5, 'scale': 0.2}, {'loc': -0.5, 'scale': 0.2}]): 
+        """
+        See Args above 
+        """
+        assert np.sum(rho) < 1, 'No zero component' 
+        self.pdf1 = ss.norm(loc = 0, scale = noise_sigma)
+        self.pdf2 = getattr(ss, sparse_pdf_names[0])(**sparse_params[0])
+        self.pdf3 = getattr(ss, sparse_pdf_names[1])(**sparse_params[1])
+
+        self.rho = rho 
+        self.sparse_pdf_name = sparse_pdf_names
+        self.noise_sigma = noise_sigma
+        self.sparse_params = sparse_params
+        
+    def pdf(self): 
+        """
+        pdf(x) --- x is the support you want to evaluate the function on 
+        """
+        mixture = lambda x: (1-np.sum(self.rho))*self.pdf1.pdf(x) + self.rho[0]*self.pdf2.pdf(x) + self.rho[1]*self.pdf3.pdf(x)
+        return mixture 
     
+    def samples(self, N): 
+        """
+        draw N samples 
+        """
+        ans = np.zeros(N)
+        index = np.asarray(random.choices([0,1,2], weights=[1-np.sum(self.rho), self.rho[0], self.rho[1]],k=N))
+        size0 = np.sum(index == 0)
+        size1 = np.sum(index == 1)
+        size2 = np.sum(index == 2)
+        print(size0, size1, size2)
+        ans[index == 0] = self.pdf1.rvs(size = size0)
+        ans[index == 1] = self.pdf2.rvs(size = size1)
+        ans[index == 2] = self.pdf3.rvs(size = size2)
+        return ans, index         
+    
+
