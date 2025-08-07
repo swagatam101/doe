@@ -16,7 +16,9 @@ from collections import defaultdict
 from scipy.spatial.distance import hamming
 import itertools
 from itertools import product, combinations
+import scipy.stats as ss
 
+# LOCAL 
 AMINO_ACIDS = list(IUPACData.protein_letters)
 
 
