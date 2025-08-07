@@ -4,7 +4,7 @@ utils for DOE
 
 __copyright__ = " "
 __status__ = "Dev"
-__doc__ = """ unilities """
+__doc__ = """ utilities """
 __author__  = "Swagatam Mukhopadhyay"
 
 import numpy as np
@@ -133,5 +133,54 @@ class SOLD:
             dist.append(hamming_dist(s, parent)) 
         return dist 
 
+
+
+#######################################################################################################
+
+class sequence_encoder: 
+    """
+    Encodes sequence in single and pairiwise one hot codes 
+    """
+    def __init__(self, protein_length): 
+        """
+        Args:
+            protein_length: L of the protein (mutated) region only 
+        """
+        binary = np.zeros(len(AMINO_ACIDS)) 
+        self.mapper_independent = dict()
+        for i,a in enumerate(AMINO_ACIDS): 
+            loc_binary = np.copy(binary)
+            loc_binary[i] = 1 
+            self.mapper_independent[a] = loc_binary 
+
+        self.amino_product = [''.join(x) for x in product(AMINO_ACIDS, AMINO_ACIDS)]
+        self.pos_product = [np.asarray(x) for x in combinations(np.arange(protein_length), 2)]
+        self.protein_length = protein_length 
+        
+    def encode_seqs(self, protein_seqs): 
+        """
+        Args: 
+            protein_seqs
+        """
+        M = []
+        for seq in protein_seqs:
+            temp = np.asarray([self.mapper_independent[k] for k in seq]).T
+            M.append(temp)
+        independent_codes = np.asarray(M)
+
+        # now compute the pairwise codes 
+        pairwise_codes = [] 
+
+        for seq in protein_seqs:    
+            array_of_seq = np.asarray(list(seq))
+            assert len(seq) == self.protein_length, "Protein length incorrect" 
+            pairwise = np.zeros((len(self.amino_product), len(self.pos_product)))
+            for j, pos in enumerate(pos_product): 
+                # need to find the index of amino_acid pairs 
+                acid_pairs = ''.join(array_of_seq[pos])
+                idx = self.amino_product.index(acid_pairs) 
+                pairwise[idx, j] = 1
+            pairwise_codes.append(pairwise)
+        return independent_codes, pairwise_codes
 
     
