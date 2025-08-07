@@ -15,6 +15,7 @@ from Bio.Data import IUPACData
 from collections import defaultdict
 from scipy.spatial.distance import hamming
 import itertools
+from itertools import product, combinations
 
 AMINO_ACIDS = list(IUPACData.protein_letters)
 
@@ -82,6 +83,7 @@ class SOLD:
         self.parent_seq = ''.join(parent_seq)  
         self.mut_positions = parent_pos 
         self.all_parent_probs = all_parent_probs
+        
     def compute_prob_n_mutations(self, N): 
         """
         Compute the probability of seeing N mutations 
@@ -133,7 +135,48 @@ class SOLD:
             dist.append(hamming_dist(s, parent)) 
         return dist 
 
+############################ code already in seqeunce encoder, but these are the algos ################
 
+def one_hot_encode(protein_seqs):
+    """
+    Args:
+        List of protein seqs 
+    returns:
+        20 x length of protein for one hot encodings
+    """
+    binary = np.zeros(len(AMINO_ACIDS)) 
+    mapper = dict()
+    for i,a in enumerate(AMINO_ACIDS): 
+        loc_binary = np.copy(binary)
+        loc_binary[i] = 1 
+        mapper[a] = loc_binary 
+    
+    M = []
+    for seq in protein_seqs:
+        temp = np.asarray([mapper[k] for k in seq]).T
+        M.append(temp)
+    return np.asarray(M)
+
+
+def pairwise_encode(protein_seq): 
+    """
+    pairwise encode protein sequences --- so 400 x l(l-1)/2 code, where l is the length of the protein 
+    Args: 
+        The protein sequence in the mutated positions, concatenated, not the whole sequence with constatnt region
+    """
+    L = len(protein_seq) # NOTE: I am generally only working with the subsequence that is mutated---not the whole sequence 
+    array_of_seq = np.asarray(list(protein_seq))
+    amino_product = [''.join(x) for x in product(AMINO_ACIDS, AMINO_ACIDS)]
+    pos_product = [np.asarray(x) for x in combinations(np.arange(L), 2)]
+    
+    codes = np.zeros((len(amino_product), len(pos_product)))
+    for j, pos in enumerate(pos_product): 
+        # need to find the index of amino_acid pairs 
+        acid_pairs = ''.join(array_of_seq[pos])
+        idx = amino_product.index(acid_pairs) 
+        codes[idx, j] = 1
+
+    return codes 
 
 #######################################################################################################
 
@@ -175,7 +218,7 @@ class sequence_encoder:
             array_of_seq = np.asarray(list(seq))
             assert len(seq) == self.protein_length, "Protein length incorrect" 
             pairwise = np.zeros((len(self.amino_product), len(self.pos_product)))
-            for j, pos in enumerate(pos_product): 
+            for j, pos in enumerate(self.pos_product): 
                 # need to find the index of amino_acid pairs 
                 acid_pairs = ''.join(array_of_seq[pos])
                 idx = self.amino_product.index(acid_pairs) 
