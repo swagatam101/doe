@@ -15,6 +15,7 @@ from Bio.Data import IUPACData
 from collections import defaultdict
 from scipy.spatial.distance import hamming
 import itertools
+import random
 from itertools import product, combinations
 import scipy.stats as ss
 
@@ -62,7 +63,7 @@ class SOLD:
         positions = sold_mat_df.columns.astype(int)
         mat = sold_mat_df.to_numpy()
         parent = {}   
-        mutation_probs = defaultdict(dict)  
+        mutation_probs = defaultdict(dict) 
         all_parent_probs = [] 
         for i,r in enumerate(positions):
             probs = mat[:,i] 
@@ -74,12 +75,20 @@ class SOLD:
                 parent_aa = amino_acids[np.argmax(probs)] 
                 parent[r] = str(parent_aa)
                 inds = np.flatnonzero(probs) 
-                mutation_probs[r] = {str(amino_acids[i]):float(probs[i]) for i in inds} 
+                mutation_probs[r] = {str(amino_acids[m]):float(probs[m]) for m in inds}
+
         self.mutation_probs = mutation_probs
+
         self.parent = parent
         parent_seq = ['N']*len(parent) 
         #making sure this is done robustly in case data entry is not in order
-        parent_pos = list(np.sort(list(parent.keys())))
+        parent_pos = list(np.sort(list(parent.keys()))) #NOTE this is SORTED
+                
+        mutation_probs_variable_region_indexed = defaultdict() 
+        for i, p in enumerate(parent_pos): 
+            mutation_probs_variable_region_indexed[i] = mutation_probs[p] 
+        self.mutation_probs_variable_region_indexed = mutation_probs_variable_region_indexed
+
         for i, v in parent.items():
             parent_seq[parent_pos.index(i)] = v
         self.parent_seq = ''.join(parent_seq)  
@@ -186,10 +195,10 @@ class sequence_encoder:
     """
     Encodes sequence in single and pairiwise one hot codes 
     """
-    def __init__(self, protein_length): 
+    def __init__(self, mutated_region_length): 
         """
         Args:
-            protein_length: L of the protein (mutated) region only 
+            mutated_region_length: the length of ONLY the variable region (mutated region) of the protein, NOT the whole protein length! 
         """
         binary = np.zeros(len(AMINO_ACIDS)) 
         self.mapper_independent = dict()
@@ -199,8 +208,8 @@ class sequence_encoder:
             self.mapper_independent[a] = loc_binary 
 
         self.amino_product = [''.join(x) for x in product(AMINO_ACIDS, AMINO_ACIDS)]
-        self.pos_product = [np.asarray(x) for x in combinations(np.arange(protein_length), 2)]
-        self.protein_length = protein_length 
+        self.pos_product = [np.asarray(x) for x in combinations(np.arange(mutated_region_length), 2)]
+        self.mutated_region_length = mutated_region_length 
         
     def encode_seqs(self, protein_seqs): 
         """
@@ -218,7 +227,7 @@ class sequence_encoder:
 
         for seq in protein_seqs:    
             array_of_seq = np.asarray(list(seq))
-            assert len(seq) == self.protein_length, "Protein length incorrect" 
+            assert len(seq) == self.mutated_region_length, "Protein length incorrect" 
             pairwise = np.zeros((len(self.amino_product), len(self.pos_product)))
             for j, pos in enumerate(self.pos_product): 
                 # need to find the index of amino_acid pairs 
@@ -235,8 +244,8 @@ class create_mixture:
     Generates synthetic approximate "sparse" signal---this simply creates a mixture of distributions, one is close to zero (so, irrelevant and noise, so is Gaussian)
     and the other is any other distribution that is the "relevant" signal 
     Args: 
-        rho: sparsity fraction for the postive and negative components of weights 
-        sparse_pdf_name: any pdf function from scipy.stats, pass name as string
+        rho: sparsity fractions (list) for the postive and negative components of weights 
+        sparse_pdf_name: any pdf function from scipy.stats, pass name as string, noise pdf is centered Gaussian here, meaning the component capturing approximate zero weights  
         noise_sigma: std. of zero centered noise 
         sparse_params: the params for the sparse signal pdf 
         
@@ -274,10 +283,141 @@ class create_mixture:
         size0 = np.sum(index == 0)
         size1 = np.sum(index == 1)
         size2 = np.sum(index == 2)
-        print(size0, size1, size2)
         ans[index == 0] = self.pdf1.rvs(size = size0)
         ans[index == 1] = self.pdf2.rvs(size = size1)
         ans[index == 2] = self.pdf3.rvs(size = size2)
         return ans, index         
     
 
+
+
+#######################################################################################################
+
+
+class create_in_silico_model: 
+    """
+    Create an in silico model for simulation with independent and pairwise (epistatic) contributions 
+    """
+    def __init__(self, mutated_region_length, independent_params = None, pairwise_params = None): 
+        """
+        Args:
+            mutated_region_length: the length of ONLY the variable region (mutated region) of the protein, NOT the whole protein length! 
+        """
+
+        # 
+        self.shape_independent_weights = ((len(AMINO_ACIDS), mutated_region_length))
+        self.mutated_region_length = mutated_region_length 
+
+        if independent_params is None: 
+            independent_params = dict() 
+
+        # see the create mixture function
+        I_defaults = {'rho':[0.4, 0.2], 'sparse_pdf_names': ['norm', 'norm'], 'noise_sigma' : 0.02, 'sparse_params': [{'loc': 0.5, 'scale': 0.2}, {'loc': -0.5, 'scale': 0.2}]} 
+        independent_params.update(I_defaults) 
+        # now create weights 
+        self.Prob_I = create_mixture(**independent_params)
+        I_samples, _ = self.Prob_I.samples(np.prod(self.shape_independent_weights))         
+
+        # weights 
+        self.independent_weights = I_samples.reshape(self.shape_independent_weights) 
+        
+        # Now create the pairwise component weights! 
+        
+        self.amino_product = [''.join(x) for x in product(AMINO_ACIDS, AMINO_ACIDS)]
+        self.pos_product = [np.asarray(x) for x in combinations(np.arange(mutated_region_length), 2)]
+        self.shape_pairwise_weights  = (len(self.amino_product), len(self.pos_product))
+        
+        if pairwise_params is None: 
+            pairwise_params = dict() 
+
+        # see the create mixture function
+        P_defaults = {'rho':[0.1, 0.1], 'sparse_pdf_names': ['norm', 'norm'], 'noise_sigma' : 0.02, 'sparse_params': [{'loc': 0.5, 'scale': 0.2}, {'loc': -0.5, 'scale': 0.2}]} 
+        pairwise_params.update(P_defaults) 
+        # now create weights 
+        self.Prob_P = create_mixture(**pairwise_params)
+        P_samples, _ = self.Prob_P.samples(np.prod(self.shape_pairwise_weights))             
+        self.pairwise_weights = P_samples.reshape(self.shape_pairwise_weights) 
+
+
+    def create_masked_weights(self, mutation_probs_variable_region_dict): 
+        """
+        Args: 
+            pass the dict of mutation probs (this is generated by SOLD matrix class, attribute dict is called mutation_probs_variable_region_indexed) 
+            example:
+            {0: {'D': 0.05, 'K': 0.85, 'M': 0.05, 'Y': 0.05},
+             1: {'C': 0.05, 'G': 0.05, 'I': 0.05, 'P': 0.85},
+             2: {'F': 0.05, 'N': 0.05, 'R': 0.85, 'Y': 0.05},
+             3: {'G': 0.05, 'I': 0.05, 'L': 0.85, 'Q': 0.05},
+             4: {'A': 0.05, 'E': 0.05, 'R': 0.05, 'W': 0.85},
+             5: {'A': 0.05, 'D': 0.05, 'I': 0.85, 'K': 0.05}}
+            where the keys are the index of the mutated regions and the values are dicts of probs of each amino acid
+        """
+        assert len(mutation_probs_variable_region_dict) == self.mutated_region_length, "The dict passed is invalid, length mismatch" 
+        amino_product = [np.asarray(x) for x in product(AMINO_ACIDS, AMINO_ACIDS)]
+        pos_product = [np.asarray(x) for x in combinations(np.arange(self.mutated_region_length), 2)]
+
+        independent_mask = np.zeros((len(AMINO_ACIDS), self.mutated_region_length)) 
+        pairwise_mask = np.zeros((len(amino_product), len(pos_product)))
+
+        for k,v in mutation_probs_variable_region_dict.items(): 
+            for s,t in v.items(): 
+                amino_index = AMINO_ACIDS.index(s)
+                independent_mask[amino_index, k] = 1 
+
+
+        for i, a in enumerate(amino_product): 
+            for j, k in enumerate(pos_product): 
+                if (a[0] in mutation_probs_variable_region_dict[k[0]]) &  (a[1] in mutation_probs_variable_region_dict[k[1]]): 
+                    pairwise_mask[i,j] = 1
+
+        self.independent_mask = independent_mask
+        self.pairwise_mask = pairwise_mask 
+        
+        return independent_mask, pairwise_mask
+
+
+    def model(self, independent_codes, pairwise_codes): 
+        """
+        Args: 
+            independent_codes: the result of encoding my sequence encoder to independent codes --- these are tensors--- N seqs times A amino acids time L positions (shape_independet_weights) etc. 
+            pairwise_codes: similar 
+        """
+        ans1 = np.einsum('ijk, jk -> i', independent_codes, self.independent_weights) 
+        ans2 = np.einsum('ijk, jk -> i', pairwise_codes, self.pairwise_weights)
+        return ans1 + ans2 
+
+    def plot_weights(self): 
+        """
+        Plotting functions 
+        """
+        I_samples = np.ravel(self.independent_weights) 
+        GRID_SIZE = 1000
+        x = np.linspace(np.min(I_samples), np.max(I_samples), GRID_SIZE)
+        plt.figure() 
+        plt.plot(x, self.Prob_I.pdf()(x))
+        _ = plt.hist(I_samples, density=True, bins = 50)        
+        plt.title('Distribution of independent weights') 
+
+        P_samples = np.ravel(self.pairwise_weights) 
+        x = np.linspace(np.min(P_samples), np.max(P_samples), GRID_SIZE)
+        plt.figure() 
+        plt.plot(x, self.Prob_P.pdf()(x))
+        _ = plt.hist(P_samples, density=True, bins = 50)        
+        plt.title('Distribution of pairwise weights') 
+        # weights 
+        plt.figure() 
+        plt.imshow(self.independent_weights, vmin = -1, vmax = 1, cmap = 'RdBu') 
+        _  = plt.xticks(range(self.mutated_region_length), rotation = 90)
+        _  = plt.yticks(range(len(AMINO_ACIDS)), AMINO_ACIDS)
+        plt.title("Independent weights") 
+        plt.colorbar() 
+        plt.figure(figsize = (5, 70))
+        plt.imshow(self.pairwise_weights, vmin = -1, vmax = 1, cmap = 'RdBu', aspect = 'auto') 
+        _  = plt.xticks(range(len(self.pos_product)), self.pos_product, rotation = 90)
+        _  = plt.yticks(range(len(self.amino_product)), self.amino_product)
+        plt.title("Pairwise weights") 
+        #plt.colorbar
+
+        
+
+        
