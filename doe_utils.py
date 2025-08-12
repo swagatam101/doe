@@ -24,6 +24,39 @@ AMINO_ACIDS = list(IUPACData.protein_letters)
 
 
 
+def create_synthetic_SOLD_matrix(num_mutated, length_of_protein, parent_prob = 0.85, mut_probs = [0.05, 0.05, 0.05]): 
+    """
+    Creates an artifical SOLD matrix 
+    Args: 
+        num_mutated: number of postions mutated 
+        length_of_protein
+        parent_prob: this makes all parent pos position uniform 
+        mut_probs: how mane ranodm amino acdis to mutated to with probs 
+    """
+    parent = ''.join(np.random.choice(AMINO_ACIDS, length_of_protein))
+    print("Parent protein:", parent)
+    mutated_pos = np.sort(np.random.choice(range(length_of_protein), num_mutated, replace = False))
+    print("Random mutaed positions", mutated_pos) 
+    random_muts = [] 
+    assert np.sum(mut_probs) + parent_prob == 1
+    mut_dict = defaultdict(dict) 
+    for i in mutated_pos: 
+        draws = list(AMINO_ACIDS) 
+        draws.remove(parent[i]) 
+        to_draw = np.random.choice(draws, len(mut_probs), replace = False) 
+        mut_dict[int(i)] = {parent[i]: parent_prob} 
+        for k,l in enumerate(to_draw):
+            mut_dict[int(i)].update({str(l): mut_probs[k]})
+    sold_mat = np.zeros((len(AMINO_ACIDS), length_of_protein))
+    for k,v in mut_dict.items(): 
+        for base, prob in v.items(): 
+            sold_mat[AMINO_ACIDS.index(base), k] = prob
+    sold_mat_df = pd.DataFrame(sold_mat, index = AMINO_ACIDS, columns = np.arange(length_of_protein))
+    return sold_mat_df, parent, mut_dict  
+
+
+    
+
 def hamming_dist(seq1, seq2): 
     """
     compute hamming distance (number of mutations) for same length sequences 
@@ -370,22 +403,32 @@ class create_in_silico_model:
                 if (a[0] in mutation_probs_variable_region_dict[k[0]]) &  (a[1] in mutation_probs_variable_region_dict[k[1]]): 
                     pairwise_mask[i,j] = 1
 
-        self.independent_mask = independent_mask
-        self.pairwise_mask = pairwise_mask 
+        self.independent_mask = independent_mask.astype(bool)
+        self.pairwise_mask = pairwise_mask.astype(bool) 
         
         return independent_mask, pairwise_mask
 
 
-    def model(self, independent_codes, pairwise_codes): 
+    def model(self, independent_codes, pairwise_codes, masked = False): 
         """
         Args: 
             independent_codes: the result of encoding my sequence encoder to independent codes --- these are tensors--- N seqs times A amino acids time L positions (shape_independet_weights) etc. 
             pairwise_codes: similar 
+            masked: ignore the weights of independent and pairwise positions that are not variable! 
         """
-        ans1 = np.einsum('ijk, jk -> i', independent_codes, self.independent_weights) 
-        ans2 = np.einsum('ijk, jk -> i', pairwise_codes, self.pairwise_weights)
-        return ans1 + ans2 
+        if masked is False:
+            ans1 = np.einsum('ijk, jk -> i', independent_codes, self.independent_weights) 
+            ans2 = np.einsum('ijk, jk -> i', pairwise_codes, self.pairwise_weights)
+        else: 
+            temp1 = np.copy(self.independent_weights) 
+            temp2 = np.copy(self.pairwise_weights) 
+            temp1[~self.independent_mask] = 0 
+            temp2[~self.pairwise_mask] = 0 
+            ans1 = np.einsum('ijk, jk -> i', independent_codes, temp1)  
+            ans2 = np.einsum('ijk, jk -> i', pairwise_codes, temp2) 
 
+        return ans1 + ans2 
+        
     def plot_weights(self): 
         """
         Plotting functions 
