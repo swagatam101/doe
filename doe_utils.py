@@ -364,7 +364,7 @@ class create_in_silico_model:
             pairwise_params = dict() 
 
         # see the create mixture function
-        P_defaults = {'rho':[0.1, 0.1], 'sparse_pdf_names': ['norm', 'norm'], 'noise_sigma' : 0.01, 'sparse_params': [{'loc': 0.25, 'scale': 0.2}, {'loc': -0.25, 'scale': 0.2}]} 
+        P_defaults = {'rho':[0.1, 0.1], 'sparse_pdf_names': ['norm', 'norm'], 'noise_sigma' : 0.01, 'sparse_params': [{'loc': 0.5, 'scale': 0.2}, {'loc': -0.5, 'scale': 0.2}]} 
         pairwise_params.update(P_defaults) 
         # now create weights 
         self.Prob_P = create_mixture(**pairwise_params)
