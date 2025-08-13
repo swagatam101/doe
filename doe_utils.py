@@ -336,6 +336,10 @@ class create_in_silico_model:
         Args:
             mutated_region_length: the length of ONLY the variable region (mutated region) of the protein, NOT the whole protein length! 
         """
+        # independent params pdf default --- 
+        I_defaults = {'rho':[0.2, 0.2], 'sparse_pdf_names': ['norm', 'norm'], 'noise_sigma' : 0.01, 'sparse_params': [{'loc': 1, 'scale': 0.2}, {'loc': -1, 'scale': 0.2}]} 
+        #pairwise params pdf default ---
+        P_defaults = {'rho':[0.1, 0.1], 'sparse_pdf_names': ['norm', 'norm'], 'noise_sigma' : 0.01, 'sparse_params': [{'loc': 0.75, 'scale': 0.2}, {'loc': -0.75, 'scale': 0.2}]} 
 
         # 
         self.shape_independent_weights = ((len(AMINO_ACIDS), mutated_region_length))
@@ -345,7 +349,6 @@ class create_in_silico_model:
             independent_params = dict() 
 
         # see the create mixture function
-        I_defaults = {'rho':[0.4, 0.2], 'sparse_pdf_names': ['norm', 'norm'], 'noise_sigma' : 0.01, 'sparse_params': [{'loc': 1, 'scale': 0.2}, {'loc': -1, 'scale': 0.2}]} 
         independent_params.update(I_defaults) 
         # now create weights 
         self.Prob_I = create_mixture(**independent_params)
@@ -364,7 +367,6 @@ class create_in_silico_model:
             pairwise_params = dict() 
 
         # see the create mixture function
-        P_defaults = {'rho':[0.1, 0.1], 'sparse_pdf_names': ['norm', 'norm'], 'noise_sigma' : 0.01, 'sparse_params': [{'loc': 0.5, 'scale': 0.2}, {'loc': -0.5, 'scale': 0.2}]} 
         pairwise_params.update(P_defaults) 
         # now create weights 
         self.Prob_P = create_mixture(**pairwise_params)
@@ -539,7 +541,7 @@ class fitting_model:
         # Define the problem and solve
         problem = cp.Problem(objective)
         problem.solve()
-        return beta.value 
+        return beta.value, np.dot(self.features, beta.value) 
 
 
         
