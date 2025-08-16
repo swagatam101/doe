@@ -341,8 +341,8 @@ def _create_zero_mean_pairwise_weights(pairwise_weights, pairwise_feature_names,
     pairwise_vals_old = np.copy(pairwise_vals) 
     # I need to normalize such that \sum_j J_{ij} s_j = 0 so that we don't have an ambiguity in independent weight assignment h_i 
     delta = np.inf
-    TOLERANCE = 1e-8
-    MAXITER = 10000
+    TOLERANCE = 1e-12
+    MAXITER = 100000
     num_iter = 0 
 
     loc_feature_names = np.asarray([a.split(':') for a in pairwise_feature_names]) 
@@ -350,14 +350,26 @@ def _create_zero_mean_pairwise_weights(pairwise_weights, pairwise_feature_names,
         num_iter += 1 
         for i in independent_feature_names: #circle through every indepdnent feature  
             pairwise_vals_old = np.copy(pairwise_vals) 
-            inds = loc_feature_names[:, 0] == i
-            if np.any(inds): 
-                pairwise_vals[inds] -= np.mean(pairwise_vals[inds]) 
-            inds = loc_feature_names[:, 1] == i
-            if np.any(inds): 
-                pairwise_vals[inds] -= np.mean(pairwise_vals[inds]) 
+            inds1 = np.flatnonzero(loc_feature_names[:, 0] == i) 
+            inds2 = np.flatnonzero(loc_feature_names[:, 1] == i) 
+            inds = np.concatenate((inds1, inds2)) 
+            pairwise_vals[inds] -= np.mean(pairwise_vals[inds]) 
             delta = root_mean_squared_error(pairwise_vals, pairwise_vals_old) 
-    return pairwise_vals
+
+    # diff indepdent weights
+    # Find the difference that will assign independent weights to pairwise weights 
+
+    diff = np.zeros(len(independent_feature_names)) # find the individual weight diff (shift) needed to connrect the pairwise weights 
+    for i, k in enumerate(independent_feature_names): #circle through every indepdnent feature  
+        inds1 = np.flatnonzero(loc_feature_names[:, 0] == k)
+        inds2 = np.flatnonzero(loc_feature_names[:, 1] == k)
+        inds = np.concatenate((inds1, inds2)) 
+        # print(k, loc_feature_names[inds, :]) 
+        # print(np.sum(pairwise_weights[inds]))
+        # print(np.sum(pairwise_vals[inds])) 
+        # print()
+        diff[i] = 0.5*np.sum(pairwise_weights[inds]) #because every term is counted twice, once for s_i and and again for s_j 
+    return pairwise_vals, diff 
     
 
 class create_in_silico_model: 
@@ -421,11 +433,12 @@ class create_in_silico_model:
         self.mutation_probs_variable_region_dict = mutation_probs_variable_region_dict
         self.independent_mask, self.pairwise_mask, self.feature_names_independent, self.feature_names_pairwise = \
         create_masked_features(self.mutated_region_length, self.mutation_probs_variable_region_dict)
-
+        # zero out independent weights not in mask 
         self.independent_weights[~self.independent_mask] = 0 # only keep the masked weights 
+        
         # now normalize pairwise masks 
-        pairwise_vals = _create_zero_mean_pairwise_weights(self.pairwise_weights[self.pairwise_mask], self.feature_names_pairwise, self.feature_names_independent)
-        self.pairwise_weights[self.pairwise_mask] = pairwise_vals
+        #pairwise_vals, _ = _create_zero_mean_pairwise_weights(self.pairwise_weights[self.pairwise_mask], self.feature_names_pairwise, self.feature_names_independent)
+        #self.pairwise_weights[self.pairwise_mask] = pairwise_vals
         self.pairwise_weights[~self.pairwise_mask] = 0 
 
         self.ground_truth_params = np.concatenate((np.ravel(self.independent_weights[self.independent_mask]), np.ravel(self.pairwise_weights[self.pairwise_mask])))
@@ -551,7 +564,7 @@ class fitting_model:
         self.independent_mask, self.pairwise_mask, self.feature_names_independent, self.feature_names_pairwise = \
         create_masked_features(self.mutated_region_length, self.mutation_probs_variable_region_dict) 
         
-    def fit(self, seqs, activities, lambda_I = 0.00001, lambda_P = 0.0001): 
+    def fit(self, seqs, activities, lambda_I = 0.001, lambda_P = 0.01): 
         """
         Fit seqs to their activities 
         The seqs are ONLY variable regions seqs concatenated! No point trying to fit regions that don't vary in the SOLD experiment! 
@@ -563,21 +576,24 @@ class fitting_model:
         self.encoder = sequence_encoder(self.mutated_region_length)
         I_encodings, P_encodings = self.encoder.encode_seqs(seqs)
         # Now I need to select the features that are actually explored in the SOLD matrix---both for independent and pairwise 
-        self.features = np.asarray([np.concatenate((np.ravel(indt[self.independent_mask]), np.ravel(pair[self.pairwise_mask]))) for indt,pair in zip(I_encodings, P_encodings)]) 
+        self.features = np.asarray([np.concatenate((np.ravel(indt[self.independent_mask]), np.ravel(pair[self.pairwise_mask]))) for indt, pair in zip(I_encodings, P_encodings)]) 
         # Now do sparse linear regression with two different sparsity penalty for the independent and pairwise features 
-        independent_indices = np.arange(len(self.feature_names_independent))
-        pairwise_indices = np.arange(len(self.feature_names_independent), len(self.feature_names_pairwise))
+        self.independent_indices = np.arange(len(self.feature_names_independent)) # first few are independent features 
+        self.number_of_features = len(self.feature_names_independent) + len(self.feature_names_pairwise)
+        self.pairwise_indices = np.arange(len(self.feature_names_independent), self.number_of_features)  # the second set is pariwise features 
         self.number_of_features = len(self.feature_names_independent) + len(self.feature_names_pairwise)
         beta = cp.Variable(self.number_of_features) 
         # Define the objective function
-        loss = cp.sum_squares(activities - self.features @ beta)
-        penalty = (lambda_I * cp.norm1(beta[independent_indices]) +
-                   lambda_P * cp.norm1(beta[pairwise_indices]))
+        shifted_activities = activities - np.mean(activities) 
+        loss = cp.sum_squares(shifted_activities - self.features @ beta)
+        penalty = (lambda_I * cp.norm1(beta[self.independent_indices]) +
+                   lambda_P * cp.norm1(beta[self.pairwise_indices]))
         objective = cp.Minimize(loss + penalty)
         # Define the problem and solve
         problem = cp.Problem(objective)
         problem.solve()
-        return beta.value, np.dot(self.features, beta.value) 
+        predicted_activities = np.dot(self.features, beta.value) + np.mean(activities) 
+        return beta.value, predicted_activities  
 
 
         
