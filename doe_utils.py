@@ -368,7 +368,7 @@ def _create_zero_mean_pairwise_weights(pairwise_weights, pairwise_feature_names,
         # print(np.sum(pairwise_weights[inds]))
         # print(np.sum(pairwise_vals[inds])) 
         # print()
-        diff[i] = 0.5*np.sum(pairwise_weights[inds]) #because every term is counted twice, once for s_i and and again for s_j 
+        diff[i] = 0.5*np.mean(pairwise_weights[inds]) #because every term is counted twice, once for s_i and and again for s_j 
     return pairwise_vals, diff 
     
 
@@ -576,24 +576,38 @@ class fitting_model:
         self.encoder = sequence_encoder(self.mutated_region_length)
         I_encodings, P_encodings = self.encoder.encode_seqs(seqs)
         # Now I need to select the features that are actually explored in the SOLD matrix---both for independent and pairwise 
+        # first fit the independent parameters so that the pairwise paramaters are truly only pariwise, and cannot be explained away by independent by reparameterization 
+        
         self.features = np.asarray([np.concatenate((np.ravel(indt[self.independent_mask]), np.ravel(pair[self.pairwise_mask]))) for indt, pair in zip(I_encodings, P_encodings)]) 
-        # Now do sparse linear regression with two different sparsity penalty for the independent and pairwise features 
         self.independent_indices = np.arange(len(self.feature_names_independent)) # first few are independent features 
         self.number_of_features = len(self.feature_names_independent) + len(self.feature_names_pairwise)
         self.pairwise_indices = np.arange(len(self.feature_names_independent), self.number_of_features)  # the second set is pariwise features 
-        self.number_of_features = len(self.feature_names_independent) + len(self.feature_names_pairwise)
-        beta = cp.Variable(self.number_of_features) 
+        # old way 
+        #penalty = (lambda_I * cp.norm1(beta[self.independent_indices]) +
+        #           lambda_P * cp.norm1(beta[self.pairwise_indices]))
+        ##### Independent fit #####
+        beta_I = cp.Variable(len(self.feature_names_independent))
         # Define the objective function
-        shifted_activities = activities - np.mean(activities) 
-        loss = cp.sum_squares(shifted_activities - self.features @ beta)
-        penalty = (lambda_I * cp.norm1(beta[self.independent_indices]) +
-                   lambda_P * cp.norm1(beta[self.pairwise_indices]))
-        objective = cp.Minimize(loss + penalty)
+        loss_I = cp.sum_squares(activities - self.features[:,self.independent_indices] @ beta_I)
+        penalty_I = lambda_I * cp.norm1(beta_I) + lambda_I * cp.norm(beta_I)
+        objective_I= cp.Minimize(loss_I + penalty_I)
         # Define the problem and solve
-        problem = cp.Problem(objective)
-        problem.solve()
-        predicted_activities = np.dot(self.features, beta.value) + np.mean(activities) 
-        return beta.value, predicted_activities  
+        problem_I = cp.Problem(objective_I)
+        problem_I.solve()
+        predicted_activities_I = np.dot(self.features[:,self.independent_indices], beta_I.value) 
+        residuals = activities - predicted_activities_I 
+        ### Pairwise fit #######
+        beta_P = cp.Variable(len(self.feature_names_pairwise))
+        # Define the objective function
+        loss_P = cp.sum_squares(residuals - self.features[:,self.pairwise_indices] @ beta_P)    
+        penalty_P = lambda_P * cp.norm1(beta_P) + lambda_P * cp.norm(beta_P)
+        objective_P = cp.Minimize(loss_P + penalty_P)
+        # Define the problem and solve
+        problem_P = cp.Problem(objective_P)
+        problem_P.solve()
+        ans = np.concatenate((beta_I.value, beta_P.value))
+        predicted_activities = np.dot(self.features, ans) 
+        return ans, predicted_activities  
 
 
         
