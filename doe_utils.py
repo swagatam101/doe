@@ -435,10 +435,9 @@ class create_in_silico_model:
         create_masked_features(self.mutated_region_length, self.mutation_probs_variable_region_dict)
         # zero out independent weights not in mask 
         self.independent_weights[~self.independent_mask] = 0 # only keep the masked weights 
-        
         # now normalize pairwise masks 
-        #pairwise_vals, _ = _create_zero_mean_pairwise_weights(self.pairwise_weights[self.pairwise_mask], self.feature_names_pairwise, self.feature_names_independent)
-        #self.pairwise_weights[self.pairwise_mask] = pairwise_vals
+        pairwise_vals, _ = _create_zero_mean_pairwise_weights(self.pairwise_weights[self.pairwise_mask], self.feature_names_pairwise, self.feature_names_independent)
+        self.pairwise_weights[self.pairwise_mask] = pairwise_vals
         self.pairwise_weights[~self.pairwise_mask] = 0 
 
         self.ground_truth_params = np.concatenate((np.ravel(self.independent_weights[self.independent_mask]), np.ravel(self.pairwise_weights[self.pairwise_mask])))
