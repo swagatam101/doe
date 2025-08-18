@@ -563,7 +563,7 @@ class fitting_model:
         self.independent_mask, self.pairwise_mask, self.feature_names_independent, self.feature_names_pairwise = \
         create_masked_features(self.mutated_region_length, self.mutation_probs_variable_region_dict) 
         
-    def fit(self, seqs, activities, lambda_I = 0.1, lambda_P = 0.01): 
+    def fit(self, seqs, activities, lambda_I = 0.01, lambda_P = 0.1): 
         """
         Fit seqs to their activities 
         The seqs are ONLY variable regions seqs concatenated! No point trying to fit regions that don't vary in the SOLD experiment! 
