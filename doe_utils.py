@@ -2,7 +2,7 @@
 utils for DOE 
 """
 
-__copyright__ = " "
+__copyright__ = "swagatam"
 __status__ = "Dev"
 __doc__ = """ utilities """
 __author__  = "Swagatam Mukhopadhyay"
