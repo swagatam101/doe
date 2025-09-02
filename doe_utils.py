@@ -20,6 +20,7 @@ from itertools import product, combinations
 import scipy.stats as ss
 import cvxpy as cp 
 from sklearn.metrics import root_mean_squared_error
+import re
 
 # LOCAL 
 AMINO_ACIDS = list(IUPACData.protein_letters)
@@ -295,7 +296,7 @@ class create_mixture:
         """
         See Args above 
         """
-        assert np.sum(rho) < 1, 'No zero component' 
+        assert np.sum(rho) < 1, 'Illegal probabilities for components, check rho' 
         self.pdf1 = ss.norm(loc = 0, scale = noise_sigma)
         self.pdf2 = getattr(ss, sparse_pdf_names[0])(**sparse_params[0])
         self.pdf3 = getattr(ss, sparse_pdf_names[1])(**sparse_params[1])
@@ -332,46 +333,63 @@ class create_mixture:
 #######################################################################################################
 def _create_zero_mean_pairwise_weights(pairwise_weights, pairwise_feature_names, independent_feature_names): 
     """
-    Internal function to create leagal pairwise weights
+    Internal function to create legal pairwise weights
     Args: 
         pairwise_weights: see in slico model class, this is the vecotor of pairwise weights 
-        feature_names: This are the names of the pariwsie features 
+        pairwise_feature_names: This are the names of the pariwsie features 
+        independent_feature_names: independnt features 
     """
     pairwise_vals = np.copy(pairwise_weights) 
     pairwise_vals_old = np.copy(pairwise_vals) 
     # I need to normalize such that \sum_j J_{ij} s_j = 0 so that we don't have an ambiguity in independent weight assignment h_i 
-    delta = np.inf
     TOLERANCE = 1e-12
     MAXITER = 100000
     num_iter = 0 
-
-    loc_feature_names = np.asarray([a.split(':') for a in pairwise_feature_names]) 
+    delta = np.inf
+    ## This is make sure \sum_i J_ij and \sum_j J_IJ  is zero
+    loc_feature_names_1 = np.asarray([a.split(':') for a in pairwise_feature_names]) 
     while (delta > TOLERANCE) and (num_iter < MAXITER): 
         num_iter += 1 
         for i in independent_feature_names: #circle through every indepdnent feature  
             pairwise_vals_old = np.copy(pairwise_vals) 
-            inds1 = np.flatnonzero(loc_feature_names[:, 0] == i) 
-            inds2 = np.flatnonzero(loc_feature_names[:, 1] == i) 
+            inds1 = np.flatnonzero(loc_feature_names_1[:, 0] == i) 
+            inds2 = np.flatnonzero(loc_feature_names_1[:, 1] == i) 
             inds = np.concatenate((inds1, inds2)) 
             pairwise_vals[inds] -= np.mean(pairwise_vals[inds]) 
             delta = root_mean_squared_error(pairwise_vals, pairwise_vals_old) 
 
-    # diff indepdent weights
+    ## I also need to sum over features at every position make them zero owing to the null space created by the fact that each position must have at least one feature 
+    delimiters = [':', '-']
+    pattern = '|'.join(map(re.escape, delimiters))
+    loc_feature_names_2 = np.asarray([re.split(pattern, a) for a in pairwise_feature_names]) # now row 0 is position and row 2 is position
+    num_iter = 0 
+    delta = np.inf
+    ## This is make sure \sum_i J_ij and \sum_j J_IJ  is zero
+    temp = np.asarray([a.split('-') for a in independent_feature_names])
+    pos = np.unique(temp[:,0])
+    while (delta > TOLERANCE) and (num_iter < MAXITER): 
+        num_iter += 1 
+        for i in pos: #circle through every indepednent position  
+            pairwise_vals_old = np.copy(pairwise_vals) 
+            inds1 = np.flatnonzero(loc_feature_names_2[:, 0] == i) 
+            inds2 = np.flatnonzero(loc_feature_names_2[:, 2] == i) 
+            inds = np.concatenate((inds1, inds2)) 
+            pairwise_vals[inds] -= np.mean(pairwise_vals[inds]) 
+            delta = root_mean_squared_error(pairwise_vals, pairwise_vals_old) 
+    
+    # diff indepedent weights
     # Find the difference that will assign independent weights to pairwise weights 
 
     diff = np.zeros(len(independent_feature_names)) # find the individual weight diff (shift) needed to connrect the pairwise weights 
     for i, k in enumerate(independent_feature_names): #circle through every indepdnent feature  
-        inds1 = np.flatnonzero(loc_feature_names[:, 0] == k)
-        inds2 = np.flatnonzero(loc_feature_names[:, 1] == k)
+        inds1 = np.flatnonzero(loc_feature_names_1[:, 0] == k)
+        inds2 = np.flatnonzero(loc_feature_names_1[:, 1] == k)
         inds = np.concatenate((inds1, inds2)) 
-        # print(k, loc_feature_names[inds, :]) 
-        # print(np.sum(pairwise_weights[inds]))
-        # print(np.sum(pairwise_vals[inds])) 
-        # print()
         diff[i] = 0.5*np.mean(pairwise_weights[inds]) #because every term is counted twice, once for s_i and and again for s_j 
     return pairwise_vals, diff 
     
 
+#######################################################################################################
 class create_in_silico_model: 
     """
     Create an in silico model for simulation with independent and pairwise (epistatic) contributions 
@@ -396,22 +414,21 @@ class create_in_silico_model:
         # independent params pdf default --- 
         I_defaults = {'rho':[0.2, 0.2], 'sparse_pdf_names': ['norm', 'norm'], 'noise_sigma' : 0.01, 'sparse_params': [{'loc': 1, 'scale': 0.2}, {'loc': -1, 'scale': 0.2}]} 
         #pairwise params pdf default ---
-        P_defaults = {'rho':[0.1, 0.1], 'sparse_pdf_names': ['norm', 'norm'], 'noise_sigma' : 0.01, 'sparse_params': [{'loc': 0.75, 'scale': 0.2}, {'loc': -0.75, 'scale': 0.2}]} 
+        P_defaults = {'rho':[0.2, 0.2], 'sparse_pdf_names': ['norm', 'norm'], 'noise_sigma' : 0.01, 'sparse_params': [{'loc': 0.75, 'scale': 0.2}, {'loc': -0.75, 'scale': 0.2}]} 
 
         self.shape_independent_weights = ((len(AMINO_ACIDS), mutated_region_length))
         self.mutated_region_length = mutated_region_length 
 
-        if independent_params is None: 
-            independent_params = dict() 
-
-        # see the create mixture function
-        independent_params.update(I_defaults) 
+        if independent_params is not None: 
+            I_defaults.update(independent_params) 
+        self.independent_params = I_defaults.copy()  
+        
         # now create weights 
-        self.Prob_I = create_mixture(**independent_params)
+        self.Prob_I = create_mixture(**self.independent_params)
         I_samples, _ = self.Prob_I.samples(np.prod(self.shape_independent_weights))         
 
         # weights 
-        self.independent_weights = I_samples.reshape(self.shape_independent_weights) 
+        self.raw_independent_weights = I_samples.reshape(self.shape_independent_weights) 
         
         # Now create the pairwise component weights! 
         
@@ -419,25 +436,32 @@ class create_in_silico_model:
         self.pos_product = [np.asarray(x) for x in combinations(np.arange(mutated_region_length), 2)]
         self.shape_pairwise_weights  = (len(self.amino_product), len(self.pos_product))
         
-        if pairwise_params is None: 
-            pairwise_params = dict() 
-
+        if pairwise_params is not None: 
+            P_defaults.update(pairwise_params) 
         # see the create mixture function
-        pairwise_params.update(P_defaults) 
+        self.pairwise_params = P_defaults.copy() 
+        
         # now create weights 
-        self.Prob_P = create_mixture(**pairwise_params)
+        self.Prob_P = create_mixture(**self.pairwise_params)
         P_samples, _ = self.Prob_P.samples(np.prod(self.shape_pairwise_weights))             
-        self.pairwise_weights = P_samples.reshape(self.shape_pairwise_weights) 
+        self.raw_pairwise_weights = P_samples.reshape(self.shape_pairwise_weights) 
 
         assert len(mutation_probs_variable_region_dict) == self.mutated_region_length, "The dict passed is invalid, length mismatch" 
         self.mutation_probs_variable_region_dict = mutation_probs_variable_region_dict
         self.independent_mask, self.pairwise_mask, self.feature_names_independent, self.feature_names_pairwise = \
         create_masked_features(self.mutated_region_length, self.mutation_probs_variable_region_dict)
         # zero out independent weights not in mask 
+
+        self.independent_weights = np.copy(self.raw_independent_weights)
         self.independent_weights[~self.independent_mask] = 0 # only keep the masked weights 
+
+        self.independent_weights = self.independent_weights - np.mean(self.independent_weights, axis = 0) # I need to make sure null space of indepdent weights is controlled like so
         # now normalize pairwise masks 
-        pairwise_vals, _ = _create_zero_mean_pairwise_weights(self.pairwise_weights[self.pairwise_mask], self.feature_names_pairwise, self.feature_names_independent)
+        pairwise_vals, _ = _create_zero_mean_pairwise_weights(self.raw_pairwise_weights[self.pairwise_mask], self.feature_names_pairwise, self.feature_names_independent)
+
+        self.pairwise_weights = np.copy(self.raw_pairwise_weights) 
         self.pairwise_weights[self.pairwise_mask] = pairwise_vals
+        self.raw_pairwise_weights[self.pairwise_mask] = pairwise_vals # show the actual values after normalizing 
         self.pairwise_weights[~self.pairwise_mask] = 0 
 
         self.ground_truth_params = np.concatenate((np.ravel(self.independent_weights[self.independent_mask]), np.ravel(self.pairwise_weights[self.pairwise_mask])))
@@ -458,20 +482,20 @@ class create_in_silico_model:
         """
         Plotting functions 
         """
-        I_samples = np.ravel(self.independent_weights) 
+        I_samples = np.ravel(self.raw_independent_weights) 
         GRID_SIZE = 1000
         x = np.linspace(np.min(I_samples), np.max(I_samples), GRID_SIZE)
         plt.figure() 
         plt.plot(x, self.Prob_I.pdf()(x))
         _ = plt.hist(I_samples, density=True, bins = 50)        
-        plt.title('Distribution of independent weights') 
+        plt.title('Distribution of unmaked independent weights') 
 
-        P_samples = np.ravel(self.pairwise_weights) 
+        P_samples = np.ravel(self.raw_pairwise_weights) 
         x = np.linspace(np.min(P_samples), np.max(P_samples), GRID_SIZE)
         plt.figure() 
         plt.plot(x, self.Prob_P.pdf()(x))
         _ = plt.hist(P_samples, density=True, bins = 50)        
-        plt.title('Distribution of pairwise weights') 
+        plt.title('Distribution of unmasked pairwise weights') 
         # weights 
         plt.figure() 
         plt.imshow(self.independent_weights, vmin = -1, vmax = 1, cmap = 'RdBu') 
@@ -537,6 +561,62 @@ def create_masked_features(mutated_region_length, mutation_probs_variable_region
 
 #######################################################################################################
 
+
+def _create_constraint_mat(pairwise_feature_names, independent_feature_names): 
+    """
+    Internal function to create constrained mat
+
+    There are two kinds of constraints 
+    sum_i J_ij = 0 
+    sum_j J_ij = 0 for every feature i, j --- note features are never for the same positions, always different 
+
+    I also need to create constraint mat for sum over every position of all features is zero 
+    so sum_a h_ia where now h_ia is the weight for ith position and amino acid a 
+    Args: 
+        pairwise_feature_names: This are the names of the pariwsie features 
+        inpdendent_feature_names: names of independent features 
+    """
+
+    split_pair_feature_names = np.asarray([a.split(':') for a in pairwise_feature_names]) 
+    L = len(pairwise_feature_names)
+    constrained_mat_J = [] 
+    for i in independent_feature_names: #circle through every indepednent feature 
+        local_vec = np.zeros(L) 
+        inds1 = np.flatnonzero(split_pair_feature_names[:, 0] == i) 
+        inds2 = np.flatnonzero(split_pair_feature_names[:, 1] == i) 
+        inds = np.concatenate((inds1, inds2)) 
+        local_vec[inds] = 1
+        constrained_mat_J.append(local_vec) 
+
+    pos_feat_independent = np.asarray([a.split('-') for a in independent_feature_names])
+    K = len(independent_feature_names) 
+    pos = np.unique(pos_feat_independent[:,0])
+    constrained_mat_H = [] 
+    
+    for i in pos:
+        local_vec = np.zeros(K)
+        inds = np.flatnonzero(pos_feat_independent[:,0] == i) 
+        local_vec[inds] = 1
+        constrained_mat_H.append(local_vec) 
+
+    constrained_mat_H = np.asarray(constrained_mat_H) 
+    constrained_mat_J = np.asarray(constrained_mat_J)
+
+    # Now I need to concatenate all of this -- and add zeros for the h features and J features 
+    temp = np.zeros((len(constrained_mat_J), K))
+    c_mat_1 = np.hstack((temp, constrained_mat_J))
+
+    num_pairwise = len(pairwise_feature_names)
+    temp = np.zeros((len(constrained_mat_H),L))
+    c_mat_2 = np.hstack((constrained_mat_H, temp))
+    
+    print(np.shape(c_mat_1), np.shape(c_mat_2))
+    cmat = np.vstack((c_mat_1, c_mat_2)) 
+    return cmat
+
+#######################################################################################################
+
+
 class fitting_model: 
     """
     l1 norm fitting model of data, with different penalty for indepednent and pairwise parameters 
@@ -562,8 +642,10 @@ class fitting_model:
 
         self.independent_mask, self.pairwise_mask, self.feature_names_independent, self.feature_names_pairwise = \
         create_masked_features(self.mutated_region_length, self.mutation_probs_variable_region_dict) 
-        
-    def fit(self, seqs, activities, lambda_I = 0.01, lambda_P = 0.1): 
+
+
+
+    def fit(self, seqs, activities, lambda_I = 0.01, lambda_P = 0.01): 
         """
         Fit seqs to their activities 
         The seqs are ONLY variable regions seqs concatenated! No point trying to fit regions that don't vary in the SOLD experiment! 
@@ -581,32 +663,70 @@ class fitting_model:
         self.independent_indices = np.arange(len(self.feature_names_independent)) # first few are independent features 
         self.number_of_features = len(self.feature_names_independent) + len(self.feature_names_pairwise)
         self.pairwise_indices = np.arange(len(self.feature_names_independent), self.number_of_features)  # the second set is pariwise features 
-        # old way 
-        #penalty = (lambda_I * cp.norm1(beta[self.independent_indices]) +
-        #           lambda_P * cp.norm1(beta[self.pairwise_indices]))
-        ##### Independent fit #####
-        beta_I = cp.Variable(len(self.feature_names_independent))
-        # Define the objective function
-        loss_I = cp.sum_squares(activities - self.features[:,self.independent_indices] @ beta_I)
-        penalty_I = lambda_I * cp.norm1(beta_I) + lambda_I * cp.norm(beta_I)
-        objective_I= cp.Minimize(loss_I + penalty_I)
+
+        # I need to perform a constrained optimization
+
+        c_mat = _create_constraint_mat(self.feature_names_pairwise, self.feature_names_independent) 
+        plt.figure() 
+        plt.imshow(c_mat, aspect = 'auto', cmap = 'Greys', interpolation = 'None') 
+        # I AM HERE 
+        beta = cp.Variable(self.number_of_features)
+        constraints = c_mat @ beta == np.zeros(len(c_mat)) 
+        
+        loss = cp.sum_squares(activities - self.features @ beta)    
+        penalty = (lambda_I * cp.norm1(beta[self.independent_indices]) +
+                   lambda_P * cp.norm1(beta[self.pairwise_indices]))
+        objective = cp.Minimize(loss + penalty)
         # Define the problem and solve
-        problem_I = cp.Problem(objective_I)
-        problem_I.solve()
-        predicted_activities_I = np.dot(self.features[:,self.independent_indices], beta_I.value) 
-        residuals = activities - predicted_activities_I 
-        ### Pairwise fit #######
-        beta_P = cp.Variable(len(self.feature_names_pairwise))
-        # Define the objective function
-        loss_P = cp.sum_squares(residuals - self.features[:,self.pairwise_indices] @ beta_P)    
-        penalty_P = lambda_P * cp.norm1(beta_P) + lambda_P * cp.norm(beta_P)
-        objective_P = cp.Minimize(loss_P + penalty_P)
-        # Define the problem and solve
-        problem_P = cp.Problem(objective_P)
-        problem_P.solve()
-        ans = np.concatenate((beta_I.value, beta_P.value))
-        predicted_activities = np.dot(self.features, ans) 
-        return ans, predicted_activities  
+        problem = cp.Problem(objective, [constraints])
+        problem.solve()        
+        predicted_activities = np.dot(self.features, beta.value) 
+        return beta.value, predicted_activities  
+        
+    # def fit(self, seqs, activities, lambda_I = 0.01, lambda_P = 0.1): 
+    #     """
+    #     Fit seqs to their activities 
+    #     The seqs are ONLY variable regions seqs concatenated! No point trying to fit regions that don't vary in the SOLD experiment! 
+    #     Args: 
+    #         seqs
+    #         activities: vector of real values 
+    #     """
+    #     assert len(seqs) == len(activities), "Seqs (X) and activities (y) should be same length vectors"
+    #     self.encoder = sequence_encoder(self.mutated_region_length)
+    #     I_encodings, P_encodings = self.encoder.encode_seqs(seqs)
+    #     # Now I need to select the features that are actually explored in the SOLD matrix---both for independent and pairwise 
+    #     # first fit the independent parameters so that the pairwise paramaters are truly only pariwise, and cannot be explained away by independent by reparameterization 
+        
+    #     self.features = np.asarray([np.concatenate((np.ravel(indt[self.independent_mask]), np.ravel(pair[self.pairwise_mask]))) for indt, pair in zip(I_encodings, P_encodings)]) 
+    #     self.independent_indices = np.arange(len(self.feature_names_independent)) # first few are independent features 
+    #     self.number_of_features = len(self.feature_names_independent) + len(self.feature_names_pairwise)
+    #     self.pairwise_indices = np.arange(len(self.feature_names_independent), self.number_of_features)  # the second set is pariwise features 
+    #     # old way 
+    #     #penalty = (lambda_I * cp.norm1(beta[self.independent_indices]) +
+    #     #           lambda_P * cp.norm1(beta[self.pairwise_indices]))
+    #     ##### Independent fit #####
+    #     beta_I = cp.Variable(len(self.feature_names_independent))
+    #     # Define the objective function
+    #     loss_I = cp.sum_squares(activities - self.features[:,self.independent_indices] @ beta_I)
+    #     penalty_I = lambda_I * cp.norm1(beta_I) + lambda_I * cp.norm(beta_I)
+    #     objective_I= cp.Minimize(loss_I + penalty_I)
+    #     # Define the problem and solve
+    #     problem_I = cp.Problem(objective_I)
+    #     problem_I.solve()
+    #     predicted_activities_I = np.dot(self.features[:,self.independent_indices], beta_I.value) 
+    #     residuals = activities - predicted_activities_I 
+    #     ### Pairwise fit #######
+    #     beta_P = cp.Variable(len(self.feature_names_pairwise))
+    #     # Define the objective function
+    #     loss_P = cp.sum_squares(residuals - self.features[:,self.pairwise_indices] @ beta_P)    
+    #     penalty_P = lambda_P * cp.norm1(beta_P) + lambda_P * cp.norm(beta_P)
+    #     objective_P = cp.Minimize(loss_P + penalty_P)
+    #     # Define the problem and solve
+    #     problem_P = cp.Problem(objective_P)
+    #     problem_P.solve()
+    #     ans = np.concatenate((beta_I.value, beta_P.value))
+    #     predicted_activities = np.dot(self.features, ans) 
+    #     return ans, predicted_activities  
 
 
         
