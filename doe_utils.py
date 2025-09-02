@@ -359,23 +359,24 @@ def _create_zero_mean_pairwise_weights(pairwise_weights, pairwise_feature_names,
             delta = root_mean_squared_error(pairwise_vals, pairwise_vals_old) 
 
     ## I also need to sum over features at every position make them zero owing to the null space created by the fact that each position must have at least one feature 
-    delimiters = [':', '-']
-    pattern = '|'.join(map(re.escape, delimiters))
-    loc_feature_names_2 = np.asarray([re.split(pattern, a) for a in pairwise_feature_names]) # now row 0 is position and row 2 is position
-    num_iter = 0 
-    delta = np.inf
-    ## This is make sure \sum_i J_ij and \sum_j J_IJ  is zero
-    temp = np.asarray([a.split('-') for a in independent_feature_names])
-    pos = np.unique(temp[:,0])
-    while (delta > TOLERANCE) and (num_iter < MAXITER): 
-        num_iter += 1 
-        for i in pos: #circle through every indepednent position  
-            pairwise_vals_old = np.copy(pairwise_vals) 
-            inds1 = np.flatnonzero(loc_feature_names_2[:, 0] == i) 
-            inds2 = np.flatnonzero(loc_feature_names_2[:, 2] == i) 
-            inds = np.concatenate((inds1, inds2)) 
-            pairwise_vals[inds] -= np.mean(pairwise_vals[inds]) 
-            delta = root_mean_squared_error(pairwise_vals, pairwise_vals_old) 
+    # delimiters = [':', '-']
+    # pattern = '|'.join(map(re.escape, delimiters))
+    # loc_feature_names_2 = np.asarray([re.split(pattern, a) for a in pairwise_feature_names]) # now row 0 is position and row 2 is position
+    # num_iter = 0 
+    # delta = np.inf
+    # ## This is make sure \sum_i J_ij and \sum_j J_IJ  is zero
+    # temp = np.asarray([a.split('-') for a in independent_feature_names])
+    # pos = np.unique(temp[:,0])
+    # while (delta > TOLERANCE) and (num_iter < MAXITER): 
+    #     num_iter += 1 
+    #     for i in pos: #circle through every indepednent position  
+    #         pairwise_vals_old = np.copy(pairwise_vals) 
+    #         inds1 = np.flatnonzero(loc_feature_names_2[:, 0] == i) 
+    #         inds2 = np.flatnonzero(loc_feature_names_2[:, 2] == i) 
+    #         inds = np.concatenate((inds1, inds2)) 
+    #         print('___', i, np.mean(pairwise_vals[inds])) 
+    #         pairwise_vals[inds] -= np.mean(pairwise_vals[inds]) 
+    #         delta = root_mean_squared_error(pairwise_vals, pairwise_vals_old) 
     
     # diff indepedent weights
     # Find the difference that will assign independent weights to pairwise weights 
@@ -455,7 +456,7 @@ class create_in_silico_model:
         self.independent_weights = np.copy(self.raw_independent_weights)
         self.independent_weights[~self.independent_mask] = 0 # only keep the masked weights 
 
-        self.independent_weights = self.independent_weights - np.mean(self.independent_weights, axis = 0) # I need to make sure null space of indepdent weights is controlled like so
+        self.independent_weights = self.independent_weights #- np.mean(self.independent_weights, axis = 0) # I need to make sure null space of indepdent weights is controlled like so
         # now normalize pairwise masks 
         pairwise_vals, _ = _create_zero_mean_pairwise_weights(self.raw_pairwise_weights[self.pairwise_mask], self.feature_names_pairwise, self.feature_names_independent)
 
@@ -568,10 +569,12 @@ def _create_constraint_mat(pairwise_feature_names, independent_feature_names):
 
     There are two kinds of constraints 
     sum_i J_ij = 0 
-    sum_j J_ij = 0 for every feature i, j --- note features are never for the same positions, always different 
+    sum_j J_ij = 0 for every feature i, j 
 
     I also need to create constraint mat for sum over every position of all features is zero 
     so sum_a h_ia where now h_ia is the weight for ith position and amino acid a 
+    This implies h'_j  := sum_i J_ij also must be zero when we sum this over the the position p 
+    where j = (p,a), the position and amino acid together make the feature
     Args: 
         pairwise_feature_names: This are the names of the pariwsie features 
         inpdendent_feature_names: names of independent features 
@@ -599,6 +602,17 @@ def _create_constraint_mat(pairwise_feature_names, independent_feature_names):
         local_vec[inds] = 1
         constrained_mat_H.append(local_vec) 
 
+    # delimiters = [':', '-']
+    # pattern = '|'.join(map(re.escape, delimiters))
+    # split_pair_feature_names_2 = np.asarray([re.split(pattern, a) for a in pairwise_feature_names]) # now
+    # for i in pos: #circle through every indepednent position  
+    #     local_vec = np.zeros(L) 
+    #     inds1 = np.flatnonzero(split_pair_feature_names_2[:, 0] == i) 
+    #     inds2 = np.flatnonzero(split_pair_feature_names_2[:, 2] == i) 
+    #     inds = np.concatenate((inds1, inds2)) 
+    #     local_vec[inds] = 1 
+    #     constrained_mat_J.append(local_vec)
+
     constrained_mat_H = np.asarray(constrained_mat_H) 
     constrained_mat_J = np.asarray(constrained_mat_J)
 
@@ -609,8 +623,6 @@ def _create_constraint_mat(pairwise_feature_names, independent_feature_names):
     num_pairwise = len(pairwise_feature_names)
     temp = np.zeros((len(constrained_mat_H),L))
     c_mat_2 = np.hstack((constrained_mat_H, temp))
-    
-    print(np.shape(c_mat_1), np.shape(c_mat_2))
     cmat = np.vstack((c_mat_1, c_mat_2)) 
     return cmat
 
@@ -645,7 +657,7 @@ class fitting_model:
 
 
 
-    def fit(self, seqs, activities, lambda_I = 0.01, lambda_P = 0.01): 
+    def fit(self, seqs, activities, lambda_I = 0.000001, lambda_P = 0.000001): 
         """
         Fit seqs to their activities 
         The seqs are ONLY variable regions seqs concatenated! No point trying to fit regions that don't vary in the SOLD experiment! 
@@ -669,7 +681,6 @@ class fitting_model:
         c_mat = _create_constraint_mat(self.feature_names_pairwise, self.feature_names_independent) 
         plt.figure() 
         plt.imshow(c_mat, aspect = 'auto', cmap = 'Greys', interpolation = 'None') 
-        # I AM HERE 
         beta = cp.Variable(self.number_of_features)
         constraints = c_mat @ beta == np.zeros(len(c_mat)) 
         
@@ -683,50 +694,4 @@ class fitting_model:
         predicted_activities = np.dot(self.features, beta.value) 
         return beta.value, predicted_activities  
         
-    # def fit(self, seqs, activities, lambda_I = 0.01, lambda_P = 0.1): 
-    #     """
-    #     Fit seqs to their activities 
-    #     The seqs are ONLY variable regions seqs concatenated! No point trying to fit regions that don't vary in the SOLD experiment! 
-    #     Args: 
-    #         seqs
-    #         activities: vector of real values 
-    #     """
-    #     assert len(seqs) == len(activities), "Seqs (X) and activities (y) should be same length vectors"
-    #     self.encoder = sequence_encoder(self.mutated_region_length)
-    #     I_encodings, P_encodings = self.encoder.encode_seqs(seqs)
-    #     # Now I need to select the features that are actually explored in the SOLD matrix---both for independent and pairwise 
-    #     # first fit the independent parameters so that the pairwise paramaters are truly only pariwise, and cannot be explained away by independent by reparameterization 
-        
-    #     self.features = np.asarray([np.concatenate((np.ravel(indt[self.independent_mask]), np.ravel(pair[self.pairwise_mask]))) for indt, pair in zip(I_encodings, P_encodings)]) 
-    #     self.independent_indices = np.arange(len(self.feature_names_independent)) # first few are independent features 
-    #     self.number_of_features = len(self.feature_names_independent) + len(self.feature_names_pairwise)
-    #     self.pairwise_indices = np.arange(len(self.feature_names_independent), self.number_of_features)  # the second set is pariwise features 
-    #     # old way 
-    #     #penalty = (lambda_I * cp.norm1(beta[self.independent_indices]) +
-    #     #           lambda_P * cp.norm1(beta[self.pairwise_indices]))
-    #     ##### Independent fit #####
-    #     beta_I = cp.Variable(len(self.feature_names_independent))
-    #     # Define the objective function
-    #     loss_I = cp.sum_squares(activities - self.features[:,self.independent_indices] @ beta_I)
-    #     penalty_I = lambda_I * cp.norm1(beta_I) + lambda_I * cp.norm(beta_I)
-    #     objective_I= cp.Minimize(loss_I + penalty_I)
-    #     # Define the problem and solve
-    #     problem_I = cp.Problem(objective_I)
-    #     problem_I.solve()
-    #     predicted_activities_I = np.dot(self.features[:,self.independent_indices], beta_I.value) 
-    #     residuals = activities - predicted_activities_I 
-    #     ### Pairwise fit #######
-    #     beta_P = cp.Variable(len(self.feature_names_pairwise))
-    #     # Define the objective function
-    #     loss_P = cp.sum_squares(residuals - self.features[:,self.pairwise_indices] @ beta_P)    
-    #     penalty_P = lambda_P * cp.norm1(beta_P) + lambda_P * cp.norm(beta_P)
-    #     objective_P = cp.Minimize(loss_P + penalty_P)
-    #     # Define the problem and solve
-    #     problem_P = cp.Problem(objective_P)
-    #     problem_P.solve()
-    #     ans = np.concatenate((beta_I.value, beta_P.value))
-    #     predicted_activities = np.dot(self.features, ans) 
-    #     return ans, predicted_activities  
-
-
-        
+    
