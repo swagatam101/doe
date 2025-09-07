@@ -331,13 +331,26 @@ class create_mixture:
 
 
 #######################################################################################################
+
 def _create_zero_mean_pairwise_weights(pairwise_weights, pairwise_feature_names, independent_feature_names): 
     """
     Internal function to create legal pairwise weights
+    J_{ia,jb} are the interaction epistatic terms 
+    h_ia are the indepedent 
+    I need to normalize such that any term in J_{ia,jb} cannot be explained away by h_ia ... 
+    for exmaple, h_ia = sum_jb J_{ia, jb} for all the jb (poistion, amino acid) epistatic terms of ia (position i, amino acid a) 
+    For every position i, pairing with all positions j, we need make sure  that the sum, sum_j J_ij = 0  
+    We also need to do this for every amino acid pairs ab, for all positions, so sum_a J_ab = 0 irrespective of position 
+    AND, for every feature ia for all it's partners jb we need to make sure sum_jb J_{ia,jb} = 0 
+
+    This is because if for any a the term is not zero, that means there is abias for a ... but bias in a is captured in sum_i J_ia 
+    But sum over a is the result for i, so we don't have to do this separetly 
+    
     Args: 
         pairwise_weights: see in slico model class, this is the vecotor of pairwise weights 
-        pairwise_feature_names: This are the names of the pariwsie features 
+        pairwise_feature_names: This are the names of the pariwise features 
         independent_feature_names: independnt features 
+        
     """
     pairwise_vals = np.copy(pairwise_weights) 
     pairwise_vals_old = np.copy(pairwise_vals) 
@@ -347,48 +360,49 @@ def _create_zero_mean_pairwise_weights(pairwise_weights, pairwise_feature_names,
     num_iter = 0 
     delta = np.inf
     ## This is make sure \sum_i J_ij and \sum_j J_IJ  is zero
-    loc_feature_names_1 = np.asarray([a.split(':') for a in pairwise_feature_names]) 
+    loc_feature_names = np.asarray([a.split(':') for a in pairwise_feature_names]) 
+    #loc_feature_names_2 = np.asarray([re.split(':' + "|" + '-', a) for a in pairwise_feature_names]) 
+
+    independent_features_split = np.asarray([a.split('-') for a in independent_feature_names]) 
+    pos = np.unique(independent_features_split[:,0])
+    amino = np.unique(independent_features_split[:,1])
     while (delta > TOLERANCE) and (num_iter < MAXITER): 
         num_iter += 1 
-        for i in independent_feature_names: #circle through every indepdnent feature  
+        for i in independent_feature_names: #circle through every independent feature  
             pairwise_vals_old = np.copy(pairwise_vals) 
-            inds1 = np.flatnonzero(loc_feature_names_1[:, 0] == i) 
-            inds2 = np.flatnonzero(loc_feature_names_1[:, 1] == i) 
-            inds = np.concatenate((inds1, inds2)) 
+            inds1 = np.flatnonzero(loc_feature_names[:, 0] == i) 
+            inds2 = np.flatnonzero(loc_feature_names[:, 1] == i) 
+            inds = np.concatenate((inds1, inds2))
             pairwise_vals[inds] -= np.mean(pairwise_vals[inds]) 
             delta = root_mean_squared_error(pairwise_vals, pairwise_vals_old) 
-
-    ## I also need to sum over features at every position make them zero owing to the null space created by the fact that each position must have at least one feature 
-    # delimiters = [':', '-']
-    # pattern = '|'.join(map(re.escape, delimiters))
-    # loc_feature_names_2 = np.asarray([re.split(pattern, a) for a in pairwise_feature_names]) # now row 0 is position and row 2 is position
-    # num_iter = 0 
-    # delta = np.inf
-    # ## This is make sure \sum_i J_ij and \sum_j J_IJ  is zero
-    # temp = np.asarray([a.split('-') for a in independent_feature_names])
-    # pos = np.unique(temp[:,0])
-    # while (delta > TOLERANCE) and (num_iter < MAXITER): 
-    #     num_iter += 1 
-    #     for i in pos: #circle through every indepednent position  
-    #         pairwise_vals_old = np.copy(pairwise_vals) 
-    #         inds1 = np.flatnonzero(loc_feature_names_2[:, 0] == i) 
-    #         inds2 = np.flatnonzero(loc_feature_names_2[:, 2] == i) 
-    #         inds = np.concatenate((inds1, inds2)) 
-    #         print('___', i, np.mean(pairwise_vals[inds])) 
-    #         pairwise_vals[inds] -= np.mean(pairwise_vals[inds]) 
-    #         delta = root_mean_squared_error(pairwise_vals, pairwise_vals_old) 
-    
-    # diff indepedent weights
-    # Find the difference that will assign independent weights to pairwise weights 
-
+            
     diff = np.zeros(len(independent_feature_names)) # find the individual weight diff (shift) needed to connrect the pairwise weights 
     for i, k in enumerate(independent_feature_names): #circle through every indepdnent feature  
-        inds1 = np.flatnonzero(loc_feature_names_1[:, 0] == k)
-        inds2 = np.flatnonzero(loc_feature_names_1[:, 1] == k)
+        inds1 = np.flatnonzero(loc_feature_names[:, 0] == k)
+        inds2 = np.flatnonzero(loc_feature_names[:, 1] == k)
         inds = np.concatenate((inds1, inds2)) 
         diff[i] = 0.5*np.mean(pairwise_weights[inds]) #because every term is counted twice, once for s_i and and again for s_j 
     return pairwise_vals, diff 
-    
+
+
+#######################################################################################################
+
+def _create_zero_mean_indepedent_feature_weights(independent_weights, independent_feature_names): 
+    """
+    Get rid of null space by making sure that the independent features at every position do not have bias of position alone 
+    which should be fitted separately 
+    Args: 
+        independent_weights 
+        independent_feature_names 
+    """
+    independent_vals = np.copy(independent_weights) 
+    pos_feat_independent = np.asarray([a.split('-') for a in independent_feature_names])
+    pos = np.unique(pos_feat_independent[:,0]) 
+    for i in pos:
+        inds = np.flatnonzero(pos_feat_independent[:, 0] == i) 
+        independent_vals[inds] -= np.mean(independent_vals[inds]) 
+
+    return independent_vals
 
 #######################################################################################################
 class create_in_silico_model: 
@@ -455,14 +469,14 @@ class create_in_silico_model:
 
         self.independent_weights = np.copy(self.raw_independent_weights)
         self.independent_weights[~self.independent_mask] = 0 # only keep the masked weights 
-
-        self.independent_weights = self.independent_weights #- np.mean(self.independent_weights, axis = 0) # I need to make sure null space of indepdent weights is controlled like so
+        independent_vals = _create_zero_mean_indepedent_feature_weights(self.raw_independent_weights[self.independent_mask], self.feature_names_independent) 
+        self.independent_weights[self.independent_mask] = independent_vals
+        
         # now normalize pairwise masks 
         pairwise_vals, _ = _create_zero_mean_pairwise_weights(self.raw_pairwise_weights[self.pairwise_mask], self.feature_names_pairwise, self.feature_names_independent)
 
         self.pairwise_weights = np.copy(self.raw_pairwise_weights) 
         self.pairwise_weights[self.pairwise_mask] = pairwise_vals
-        self.raw_pairwise_weights[self.pairwise_mask] = pairwise_vals # show the actual values after normalizing 
         self.pairwise_weights[~self.pairwise_mask] = 0 
 
         self.ground_truth_params = np.concatenate((np.ravel(self.independent_weights[self.independent_mask]), np.ravel(self.pairwise_weights[self.pairwise_mask])))
@@ -602,16 +616,6 @@ def _create_constraint_mat(pairwise_feature_names, independent_feature_names):
         local_vec[inds] = 1
         constrained_mat_H.append(local_vec) 
 
-    # delimiters = [':', '-']
-    # pattern = '|'.join(map(re.escape, delimiters))
-    # split_pair_feature_names_2 = np.asarray([re.split(pattern, a) for a in pairwise_feature_names]) # now
-    # for i in pos: #circle through every indepednent position  
-    #     local_vec = np.zeros(L) 
-    #     inds1 = np.flatnonzero(split_pair_feature_names_2[:, 0] == i) 
-    #     inds2 = np.flatnonzero(split_pair_feature_names_2[:, 2] == i) 
-    #     inds = np.concatenate((inds1, inds2)) 
-    #     local_vec[inds] = 1 
-    #     constrained_mat_J.append(local_vec)
 
     constrained_mat_H = np.asarray(constrained_mat_H) 
     constrained_mat_J = np.asarray(constrained_mat_J)
@@ -624,6 +628,7 @@ def _create_constraint_mat(pairwise_feature_names, independent_feature_names):
     temp = np.zeros((len(constrained_mat_H),L))
     c_mat_2 = np.hstack((constrained_mat_H, temp))
     cmat = np.vstack((c_mat_1, c_mat_2)) 
+    print(np.shape(cmat))
     return cmat
 
 #######################################################################################################
@@ -678,11 +683,9 @@ class fitting_model:
 
         # I need to perform a constrained optimization
 
-        c_mat = _create_constraint_mat(self.feature_names_pairwise, self.feature_names_independent) 
-        plt.figure() 
-        plt.imshow(c_mat, aspect = 'auto', cmap = 'Greys', interpolation = 'None') 
+        self.constraints = _create_constraint_mat(self.feature_names_pairwise, self.feature_names_independent) 
         beta = cp.Variable(self.number_of_features)
-        constraints = c_mat @ beta == np.zeros(len(c_mat)) 
+        constraints = self.constraints @ beta == np.zeros(len(self.constraints)) 
         
         loss = cp.sum_squares(activities - self.features @ beta)    
         penalty = (lambda_I * cp.norm1(beta[self.independent_indices]) +
