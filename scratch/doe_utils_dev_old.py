@@ -1,5 +1,5 @@
 """
-utils for DOE: major overhaul, Use Stormo simplex encoding (Hadamard matrix)  
+utils for DOE 
 """
 
 __copyright__ = "swagatam"
@@ -25,50 +25,7 @@ import re
 # LOCAL 
 AMINO_ACIDS = list(IUPACData.protein_letters)
 
-# Hadamard matrix of size 20 
-H_20 = np.asarray([[ 1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-        -1, -1, -1, -1],
-       [ 1,  1, -1,  1,  1, -1, -1, -1, -1,  1, -1,  1, -1,  1,  1,  1,
-         1, -1, -1,  1],
-       [ 1,  1,  1, -1,  1,  1, -1, -1, -1, -1,  1, -1,  1, -1,  1,  1,
-         1,  1, -1, -1],
-       [ 1, -1,  1,  1, -1,  1,  1, -1, -1, -1, -1,  1, -1,  1, -1,  1,
-         1,  1,  1, -1],
-       [ 1, -1, -1,  1,  1, -1,  1,  1, -1, -1, -1, -1,  1, -1,  1, -1,
-         1,  1,  1,  1],
-       [ 1,  1, -1, -1,  1,  1, -1,  1,  1, -1, -1, -1, -1,  1, -1,  1,
-        -1,  1,  1,  1],
-       [ 1,  1,  1, -1, -1,  1,  1, -1,  1,  1, -1, -1, -1, -1,  1, -1,
-         1, -1,  1,  1],
-       [ 1,  1,  1,  1, -1, -1,  1,  1, -1,  1,  1, -1, -1, -1, -1,  1,
-        -1,  1, -1,  1],
-       [ 1,  1,  1,  1,  1, -1, -1,  1,  1, -1,  1,  1, -1, -1, -1, -1,
-         1, -1,  1, -1],
-       [ 1, -1,  1,  1,  1,  1, -1, -1,  1,  1, -1,  1,  1, -1, -1, -1,
-        -1,  1, -1,  1],
-       [ 1,  1, -1,  1,  1,  1,  1, -1, -1,  1,  1, -1,  1,  1, -1, -1,
-        -1, -1,  1, -1],
-       [ 1, -1,  1, -1,  1,  1,  1,  1, -1, -1,  1,  1, -1,  1,  1, -1,
-        -1, -1, -1,  1],
-       [ 1,  1, -1,  1, -1,  1,  1,  1,  1, -1, -1,  1,  1, -1,  1,  1,
-        -1, -1, -1, -1],
-       [ 1, -1,  1, -1,  1, -1,  1,  1,  1,  1, -1, -1,  1,  1, -1,  1,
-         1, -1, -1, -1],
-       [ 1, -1, -1,  1, -1,  1, -1,  1,  1,  1,  1, -1, -1,  1,  1, -1,
-         1,  1, -1, -1],
-       [ 1, -1, -1, -1,  1, -1,  1, -1,  1,  1,  1,  1, -1, -1,  1,  1,
-        -1,  1,  1, -1],
-       [ 1, -1, -1, -1, -1,  1, -1,  1, -1,  1,  1,  1,  1, -1, -1,  1,
-         1, -1,  1,  1],
-       [ 1,  1, -1, -1, -1, -1,  1, -1,  1, -1,  1,  1,  1,  1, -1, -1,
-         1,  1, -1,  1],
-       [ 1,  1,  1, -1, -1, -1, -1,  1, -1,  1, -1,  1,  1,  1,  1, -1,
-        -1,  1,  1, -1],
-       [ 1, -1,  1,  1, -1, -1, -1, -1,  1, -1,  1, -1,  1,  1,  1,  1,
-        -1, -1,  1,  1]])
 
-
-#######################################################################################################
 
 def create_synthetic_SOLD_matrix(num_mutated, length_of_protein, parent_prob = 0.85, mut_probs = [0.05, 0.05, 0.05]): 
     """
@@ -250,7 +207,7 @@ def one_hot_encode(protein_seqs):
         M.append(temp)
     return np.asarray(M)
 
-#######################################################################################################
+
 def pairwise_encode(protein_seq): 
     """
     pairwise encode protein sequences --- so 400 x l(l-1)/2 code, where l is the length of the protein 
@@ -321,9 +278,6 @@ class sequence_encoder:
 
 #######################################################################################################
 
-
-
-
 class create_mixture: 
     """
     Generates synthetic approximate "sparse" signal---this simply creates a mixture of distributions, one is close to zero (so, irrelevant and noise, so is Gaussian)
@@ -378,6 +332,92 @@ class create_mixture:
 
 #######################################################################################################
 
+def _create_zero_mean_pairwise_weights(pairwise_weights, pairwise_feature_names, independent_feature_names): 
+    """
+    Internal function to create legal pairwise weights
+    J_{ia,jb} are the interaction epistatic terms 
+    h_ia are the indepedent 
+    I need to normalize such that any term in J_{ia,jb} cannot be explained away by h_ia ... 
+    for exmaple, h_ia = sum_jb J_{ia, jb} for all the jb (poistion, amino acid) epistatic terms of ia (position i, amino acid a) 
+    Moreover, if J_ia, jb can be explained away by J_ij * J_ab (product state) then there is no need for J_ia, jb ---the product state 
+    has far less parameters---so just like independent prameters can be explaied away by h_i  = sum_a h_ia ... h_i is zero for fitting h_ia model 
+    See Notes for details 
+    
+    Args: 
+        pairwise_weights: see in slico model class, this is the vecotor of pairwise weights 
+        pairwise_feature_names: This are the names of the pariwise features 
+        independent_feature_names: independnt features 
+        
+    """
+    pairwise_vals = np.copy(pairwise_weights) 
+    pairwise_vals_old = np.copy(pairwise_vals) 
+    # I need to normalize such that \sum_j J_{ij} s_j = 0 so that we don't have an ambiguity in independent weight assignment h_i 
+    TOLERANCE = 1e-12
+    MAXITER = 100000
+    num_iter = 0 
+    delta = np.inf
+    ## This is make sure \sum_i J_ij and \sum_j J_IJ  is zero
+    loc_pair_feature_names = np.asarray([a.split(':') for a in pairwise_feature_names]) 
+    loc_pair_feature_names_split = np.asarray([re.split(':' + "|" + '-', a) for a in pairwise_feature_names]) 
+
+    independent_features_split = np.asarray([a.split('-') for a in independent_feature_names]) 
+    pos = np.unique(independent_features_split[:,0])
+    amino = np.unique(independent_features_split[:,1])
+
+    pos_pairs = np.unique(loc_pair_feature_names_split[:,[0,2]], axis = 0)
+    amino_pairs = np.unique(loc_pair_feature_names_split[:,[1,3]], axis = 0)
+
+    
+    while (delta > TOLERANCE) and (num_iter < MAXITER): 
+        num_iter += 1 
+        for i in independent_feature_names: #circle through every independent feature  
+            pairwise_vals_old = np.copy(pairwise_vals) 
+            inds1 = np.flatnonzero(loc_pair_feature_names[:, 0] == i) 
+            inds2 = np.flatnonzero(loc_pair_feature_names[:, 1] == i) 
+            inds = np.concatenate((inds1, inds2))
+            pairwise_vals[inds] -= np.mean(pairwise_vals[inds]) 
+            delta1 = root_mean_squared_error(pairwise_vals, pairwise_vals_old) 
+
+        # need to remove rank 1 components like J_ij =  \sum_ab J_ij, ab
+        for p in pos_pairs: 
+            inds = np.all(loc_pair_feature_names_split[:, [0,2]] == p, axis = 1)
+            pairwise_vals[inds] -= np.mean(pairwise_vals[inds]) 
+            delta2 = root_mean_squared_error(pairwise_vals, pairwise_vals_old) 
+        # now to reomve rank 1 components like J_ab = \sum_ij J_ij,ab
+        # for a in amino_pairs: 
+        #     inds = np.all(loc_pair_feature_names_split[:, [1,3]] == a, axis = 1)
+        #     pairwise_vals[inds] -= np.mean(pairwise_vals[inds]) 
+        #     delta3 = root_mean_squared_error(pairwise_vals, pairwise_vals_old) 
+        delta = np.max([delta1, delta2])#, delta3]) 
+
+    
+    diff = np.zeros(len(independent_feature_names)) # find the individual weight diff (shift) needed to connrect the pairwise weights 
+    for i, k in enumerate(independent_feature_names): #circle through every indepdnent feature  
+        inds1 = np.flatnonzero(loc_pair_feature_names[:, 0] == k)
+        inds2 = np.flatnonzero(loc_pair_feature_names[:, 1] == k)
+        inds = np.concatenate((inds1, inds2)) 
+        diff[i] = 0.5*np.mean(pairwise_weights[inds]) #because every term is counted twice, once for s_i and and again for s_j 
+    return pairwise_vals, diff 
+
+
+#######################################################################################################
+
+def _create_zero_mean_indepedent_feature_weights(independent_weights, independent_feature_names): 
+    """
+    Get rid of null space by making sure that the independent features at every position do not have bias of position alone 
+    which should be fitted separately 
+    Args: 
+        independent_weights 
+        independent_feature_names 
+    """
+    independent_vals = np.copy(independent_weights) 
+    pos_feat_independent = np.asarray([a.split('-') for a in independent_feature_names])
+    pos = np.unique(pos_feat_independent[:,0]) 
+    for i in pos:
+        inds = np.flatnonzero(pos_feat_independent[:, 0] == i) 
+        independent_vals[inds] -= np.mean(independent_vals[inds]) 
+
+    return independent_vals
 
 #######################################################################################################
 class create_in_silico_model: 
