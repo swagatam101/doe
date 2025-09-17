@@ -273,7 +273,7 @@ def pairwise_encode(protein_seq):
 
 #######################################################################################################
 
-class sequence_encoder: 
+class Sequence_encoder: 
     """
     Encodes sequence in single and pairiwise one hot codes 
     """
@@ -321,7 +321,7 @@ class sequence_encoder:
 
 #######################################################################################################
 
-class create_mixture: 
+class Create_mixture: 
     """
     Generates synthetic approximate "sparse" signal---this simply creates a mixture of distributions, one is close to zero (so, irrelevant and noise, so is Gaussian)
     and the other is any other distribution that is the "relevant" signal 
@@ -372,7 +372,108 @@ class create_mixture:
     
 
 #######################################################################################################
-class create_in_silico_model: 
+class Encoding_basics: 
+    """
+    Base class used by both ecnoders and in silico model 
+    """
+    def __init__(self, mutated_region_length, mutation_probs_variable_region_dict): 
+        """
+        Args: 
+            mutated region length: the number of positions mutated 
+            mutation_probs_variable_region_dict: the standard way to encode the mutations --- see notes and guide 
+        """
+        self.mutated_region_length = mutated_region_length 
+        assert len(mutation_probs_variable_region_dict) == self.mutated_region_length, "The dict passed is invalid, length mismatch" 
+        self.mutation_probs_variable_region_dict = mutation_probs_variable_region_dict
+        
+        self.amino_product = [''.join(x) for x in product(AMINO_ACIDS, AMINO_ACIDS)]
+        self.pos_product = [np.asarray(x) for x in combinations(np.arange(mutated_region_length), 2)]
+
+        # Now I need to create the codes for the amino acids, using Hadamard matrix, drom the first column which is constant 
+        self.single_base_codes = H_20[:, 1:] # these are the codes for AMINO_ACIDS  
+        self.pairwise_base_codes = np.kron(self.single_base_codes, self.single_base_codes) # for AMINO_ACID pairs
+        
+        # Notice that order in maintained in itertools.product and np.kron --- I checked--- this double_base_code_mat should now be assigned to the products 
+        # This is truly how we genralize to other interaction combinations 
+
+        # Now I need to collect all of this in codes for every position that actually appear in the SOLD libraries, 
+        # so I need to create positions by AMINO and postion_pairs by AMINO pairs matrices 
+        
+        independent_codes = []
+        feature_names_independent = [] 
+        for k,v in mutation_probs_variable_region_dict.items(): 
+            for s,t in v.items(): 
+                amino_index = AMINO_ACIDS.index(s)
+                feature_names_independent.append(str(k) + '-' + str(s)) 
+                independent_codes.append(self.single_base_codes[amino_index, :]) 
+
+        pairwise_codes = [] 
+        feature_names_pairwise = [] 
+        for j, k in enumerate(self.pos_product): 
+            for i, a in enumerate(self.amino_product): 
+                if (a[0] in mutation_probs_variable_region_dict[k[0]]) &  (a[1] in mutation_probs_variable_region_dict[k[1]]): 
+                    amino_index = self.amino_product.index(''.join(a)) 
+                    feature_names_pairwise.append(str(k[0]) + '-' + str(a[0]) + ':' + str(k[1]) + '-' + str(a[1]))
+                    pairwise_codes.append(self.pairwise_base_codes[amino_index, :])
+        
+        self.independent_codes = np.asarray(independent_codes) 
+        self.shape_independent_weights  = np.shape(self.independent_codes)
+        self.feature_names_independent = np.asarray(feature_names_independent) 
+        self.feature_names_pairwise = np.asarray(feature_names_pairwise)
+        self.pairwise_codes = np.asarray(pairwise_codes) 
+        self.shape_pairwise_weights  = np.shape(self.pairwise_codes) 
+        self.independent_mapper = {i:j for i,j in zip(self.feature_names_independent, self.independent_codes)}
+        self.pairwise_mapper = {i:j for i,j in zip(self.feature_names_pairwise, self.pairwise_codes)}
+
+#######################################################################################################
+class Sequence_encoder_simplex(Encoding_basics): 
+    """
+    Encodes sequence in simplex encodings --- this one doesn't try to create a general encoder but a SOLD library specifci encoder, which makes more sense anyway 
+    Why encode variations / mutations you will never encounter? 
+    """
+    def __init__(self, mutated_region_length, mutation_probs_variable_region_dict): 
+        """
+        Args:
+            mutated_region_length: the length of ONLY the variable region (mutated region) of the protein, NOT the whole protein length! 
+        """
+        super().__init__(mutated_region_length, mutation_probs_variable_region_dict) 
+        
+    def encode_seqs(self, protein_seqs): 
+        """
+        Args: 
+            protein_seqs: this is only the variable region 
+        """
+        independent_codes = [] 
+        pairwise_codes = [] 
+        for seq in protein_seqs:
+            array_of_seq = np.asarray(list(seq))
+            assert len(seq) == self.mutated_region_length, "length mismatch of protein seq and attributes"
+            
+            local_code_I = np.zeros(self.shape_independent_weights)
+            for i in range(self.mutated_region_length): 
+                feature = str(i) + '-' + array_of_seq[i] 
+                index = list(self.feature_names_independent).index(feature) 
+                local_code_I[index, :] = self.independent_codes[index, :] 
+            independent_codes.append(local_code_I)
+            
+            local_code_J = np.zeros(self.shape_pairwise_weights)
+            for j, pos in enumerate(self.pos_product): 
+                # need to find the index of amino_acid pairs 
+                acid_pairs = array_of_seq[pos]
+                feature = str(pos[0]) + '-' + acid_pairs[0] + ':' + str(pos[1]) + '-' + acid_pairs[1]
+                index = list(self.feature_names_pairwise).index(feature)
+                local_code_J[index, :] = self.pairwise_codes[index, :]
+            pairwise_codes.append(local_code_J) 
+            
+        independent_codes = np.asarray(independent_codes)
+        pairwise_codes = np.asarray(pairwise_codes)
+
+        return independent_codes, pairwise_codes
+
+
+#######################################################################################################
+
+class Create_in_silico_model(Encoding_basics): 
     """
     Create an in silico model for simulation with independent and pairwise (epistatic) contributions 
     """
@@ -398,9 +499,8 @@ class create_in_silico_model:
         #pairwise params pdf default ---
         P_defaults = {'rho':[0.2, 0.2], 'sparse_pdf_names': ['norm', 'norm'], 'noise_sigma' : 0.01, 'sparse_params': [{'loc': 0.75, 'scale': 0.2}, {'loc': -0.75, 'scale': 0.2}]} 
 
-        self.mutated_region_length = mutated_region_length 
-        self.mutation_probs_variable_region_dict = mutation_probs_variable_region_dict
-        
+        super().__init__(mutated_region_length, mutation_probs_variable_region_dict) 
+
         if independent_params is not None: 
             I_defaults.update(independent_params) 
         self.independent_params = I_defaults.copy()  
@@ -410,53 +510,14 @@ class create_in_silico_model:
         # see the create mixture function
         self.pairwise_params = P_defaults.copy() 
 
-        assert len(mutation_probs_variable_region_dict) == self.mutated_region_length, "The dict passed is invalid, length mismatch" 
-        self.mutation_probs_variable_region_dict = mutation_probs_variable_region_dict
         
-        # These are the possibe features in combination 
-        self.amino_product = [''.join(x) for x in product(AMINO_ACIDS, AMINO_ACIDS)]
-        self.pos_product = [np.asarray(x) for x in combinations(np.arange(mutated_region_length), 2)]
-
-        # Now I need to create the codes for the amino acids, using Hadamard matrix, drom the first column which is constant 
-        self.single_base_codes = H_20[:, 1:] # these are the codes for AMINO_ACIDS  
-        self.pairwise_base_codes = np.kron(self.single_base_codes, self.single_base_codes) # for AMINO_ACID pairs
         
-        # Notice that order in maintained in itertools.product and np.kron --- I checked--- this double_base_code_mat should now be assigned to the products 
-        # This is truly how we genralize to other interaction combinations 
-
-        # Now I need to collect all of this in codes for every position that actually appear in the SOLD libraries, 
-        # so I need to create positions by AMINO and postion_pairs by AMINO pairs matrices 
-        
-        independent_codes = []
-        feature_names_independent = [] 
-        for k,v in mutation_probs_variable_region_dict.items(): 
-            for s,t in v.items(): 
-                amino_index = AMINO_ACIDS.index(s)
-                feature_names_independent.append(str(k) + '-' + str(s)) 
-                independent_codes.append(self.single_base_codes[amino_index, :]) 
-
-        pairwise_codes = [] 
-        feature_names_pairwise = [] 
-        for i, a in enumerate(self.amino_product): 
-            for j, k in enumerate(self.pos_product): 
-                if (a[0] in mutation_probs_variable_region_dict[k[0]]) &  (a[1] in mutation_probs_variable_region_dict[k[1]]): 
-                    amino_index = self.amino_product.index(''.join(a)) 
-                    feature_names_pairwise.append(str(k[0]) + '-' + str(a[0]) + ':' + str(k[1]) + '-' + str(a[1]))
-                    pairwise_codes.append(self.pairwise_base_codes[amino_index, :])
-        
-        self.independent_codes = np.asarray(independent_codes) 
-        self.shape_independent_weights  = np.shape(self.independent_codes)
-        self.feature_names_independent = np.asarray(feature_names_independent) 
-        self.feature_names_pairwise = np.asarray(feature_names_pairwise)
-        self.pairwise_codes = np.asarray(pairwise_codes) 
-        self.shape_pairwise_weights  = np.shape(self.pairwise_codes) 
-
         # Now I need to assign weights to individual and pairwise contributions 
         # first fill in the weights for the independent codes
-        self.Prob_I = create_mixture(**self.independent_params)
+        self.Prob_I = Create_mixture(**self.independent_params)
         samples_I, _ = self.Prob_I.samples(np.prod(self.shape_independent_weights))
         self.independent_weights = samples_I.reshape(self.shape_independent_weights)         
-        self.Prob_P = create_mixture(**self.pairwise_params)
+        self.Prob_P = Create_mixture(**self.pairwise_params)
         samples_P, _ = self.Prob_P.samples(np.prod(self.shape_pairwise_weights))
         self.pairwise_weights = samples_P.reshape(self.shape_pairwise_weights)              
         
@@ -504,14 +565,35 @@ class create_in_silico_model:
         plt.title("Pairwise weights") 
         #plt.colorbar
 
+#######################################################################################################
 
-
-
+def plot_encoding_independent(Encoder, code_mat, seq):
+    """
+    simple plotting to check 
+    """
+    plt.figure() 
+    plt.imshow(code_mat, vmin = -1, vmax = 1, interpolation = 'None', aspect = 'auto', cmap = 'RdBu') 
+    _ = plt.yticks(range(len(Encoder.feature_names_independent)), Encoder.feature_names_independent)
+    _ = plt.xticks(range(Encoder.shape_independent_weights[1]))
+    plt.title(seq)
+    plt.xlabel('weights for simplex encoding') 
 
 #######################################################################################################
 
+def plot_encoding_pairwise(Encoder, code_mat, seq):
+    """
+    simple plotting to check 
+    """
+    plt.figure(figsize = (10, 70)) 
+    plt.imshow(code_mat, vmin = -1, vmax = 1, interpolation = 'None', aspect = 'auto', cmap = 'RdBu') 
+    _ = plt.yticks(range(len(Encoder.feature_names_pairwise)), Encoder.feature_names_pairwise)
+    _ = plt.xticks(range(Encoder.shape_pairwise_weights[1]))
+    plt.title(seq)
+    plt.xlabel('weights for simplex encoding') 
+#######################################################################################################
 
-class fitting_model: 
+
+class Fitting_model: 
     """
     l1 norm fitting model of data, with different penalty for indepednent and pairwise parameters 
     """
