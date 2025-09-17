@@ -321,9 +321,6 @@ class sequence_encoder:
 
 #######################################################################################################
 
-
-
-
 class create_mixture: 
     """
     Generates synthetic approximate "sparse" signal---this simply creates a mixture of distributions, one is close to zero (so, irrelevant and noise, so is Gaussian)
@@ -374,11 +371,6 @@ class create_mixture:
         return ans, index         
     
 
-
-
-#######################################################################################################
-
-
 #######################################################################################################
 class create_in_silico_model: 
     """
@@ -406,58 +398,70 @@ class create_in_silico_model:
         #pairwise params pdf default ---
         P_defaults = {'rho':[0.2, 0.2], 'sparse_pdf_names': ['norm', 'norm'], 'noise_sigma' : 0.01, 'sparse_params': [{'loc': 0.75, 'scale': 0.2}, {'loc': -0.75, 'scale': 0.2}]} 
 
-        self.shape_independent_weights = ((len(AMINO_ACIDS), mutated_region_length))
         self.mutated_region_length = mutated_region_length 
-
+        self.mutation_probs_variable_region_dict = mutation_probs_variable_region_dict
+        
         if independent_params is not None: 
             I_defaults.update(independent_params) 
         self.independent_params = I_defaults.copy()  
-        
-        # now create weights 
-        self.Prob_I = create_mixture(**self.independent_params)
-        I_samples, _ = self.Prob_I.samples(np.prod(self.shape_independent_weights))         
 
-        # weights 
-        self.raw_independent_weights = I_samples.reshape(self.shape_independent_weights) 
-        
-        # Now create the pairwise component weights! 
-        
-        self.amino_product = [''.join(x) for x in product(AMINO_ACIDS, AMINO_ACIDS)]
-        self.pos_product = [np.asarray(x) for x in combinations(np.arange(mutated_region_length), 2)]
-        self.shape_pairwise_weights  = (len(self.amino_product), len(self.pos_product))
-        
         if pairwise_params is not None: 
             P_defaults.update(pairwise_params) 
         # see the create mixture function
         self.pairwise_params = P_defaults.copy() 
-        
-        # now create weights 
-        self.Prob_P = create_mixture(**self.pairwise_params)
-        P_samples, _ = self.Prob_P.samples(np.prod(self.shape_pairwise_weights))             
-        self.raw_pairwise_weights = P_samples.reshape(self.shape_pairwise_weights) 
 
         assert len(mutation_probs_variable_region_dict) == self.mutated_region_length, "The dict passed is invalid, length mismatch" 
         self.mutation_probs_variable_region_dict = mutation_probs_variable_region_dict
-        self.independent_mask, self.pairwise_mask, self.feature_names_independent, self.feature_names_pairwise = \
-        create_masked_features(self.mutated_region_length, self.mutation_probs_variable_region_dict)
-        # zero out independent weights not in mask 
-
-        self.independent_weights = np.copy(self.raw_independent_weights)
-        self.independent_weights[~self.independent_mask] = 0 # only keep the masked weights 
-        independent_vals = _create_zero_mean_indepedent_feature_weights(self.raw_independent_weights[self.independent_mask], self.feature_names_independent) 
-        self.independent_weights[self.independent_mask] = independent_vals
         
-        # now normalize pairwise masks 
-        pairwise_vals, _ = _create_zero_mean_pairwise_weights(self.raw_pairwise_weights[self.pairwise_mask], self.feature_names_pairwise, self.feature_names_independent)
+        # These are the possibe features in combination 
+        self.amino_product = [''.join(x) for x in product(AMINO_ACIDS, AMINO_ACIDS)]
+        self.pos_product = [np.asarray(x) for x in combinations(np.arange(mutated_region_length), 2)]
 
-        self.pairwise_weights = np.copy(self.raw_pairwise_weights) 
-        self.pairwise_weights[self.pairwise_mask] = pairwise_vals
-        self.pairwise_weights[~self.pairwise_mask] = 0 
+        # Now I need to create the codes for the amino acids, using Hadamard matrix, drom the first column which is constant 
+        self.single_base_codes = H_20[:, 1:] # these are the codes for AMINO_ACIDS  
+        self.pairwise_base_codes = np.kron(self.single_base_codes, self.single_base_codes) # for AMINO_ACID pairs
+        
+        # Notice that order in maintained in itertools.product and np.kron --- I checked--- this double_base_code_mat should now be assigned to the products 
+        # This is truly how we genralize to other interaction combinations 
 
-        self.ground_truth_params = np.concatenate((np.ravel(self.independent_weights[self.independent_mask]), np.ravel(self.pairwise_weights[self.pairwise_mask])))
+        # Now I need to collect all of this in codes for every position that actually appear in the SOLD libraries, 
+        # so I need to create positions by AMINO and postion_pairs by AMINO pairs matrices 
+        
+        independent_codes = []
+        feature_names_independent = [] 
+        for k,v in mutation_probs_variable_region_dict.items(): 
+            for s,t in v.items(): 
+                amino_index = AMINO_ACIDS.index(s)
+                feature_names_independent.append(str(k) + '-' + str(s)) 
+                independent_codes.append(self.single_base_codes[amino_index, :]) 
+
+        pairwise_codes = [] 
+        feature_names_pairwise = [] 
+        for i, a in enumerate(self.amino_product): 
+            for j, k in enumerate(self.pos_product): 
+                if (a[0] in mutation_probs_variable_region_dict[k[0]]) &  (a[1] in mutation_probs_variable_region_dict[k[1]]): 
+                    amino_index = self.amino_product.index(''.join(a)) 
+                    feature_names_pairwise.append(str(k[0]) + '-' + str(a[0]) + ':' + str(k[1]) + '-' + str(a[1]))
+                    pairwise_codes.append(self.pairwise_base_codes[amino_index, :])
+        
+        self.independent_codes = np.asarray(independent_codes) 
+        self.shape_independent_weights  = np.shape(self.independent_codes)
+        self.feature_names_independent = np.asarray(feature_names_independent) 
+        self.feature_names_pairwise = np.asarray(feature_names_pairwise)
+        self.pairwise_codes = np.asarray(pairwise_codes) 
+        self.shape_pairwise_weights  = np.shape(self.pairwise_codes) 
+
+        # Now I need to assign weights to individual and pairwise contributions 
+        # first fill in the weights for the independent codes
+        self.Prob_I = create_mixture(**self.independent_params)
+        samples_I, _ = self.Prob_I.samples(np.prod(self.shape_independent_weights))
+        self.independent_weights = samples_I.reshape(self.shape_independent_weights)         
+        self.Prob_P = create_mixture(**self.pairwise_params)
+        samples_P, _ = self.Prob_P.samples(np.prod(self.shape_pairwise_weights))
+        self.pairwise_weights = samples_P.reshape(self.shape_pairwise_weights)              
         
 
-    def model(self, independent_codes, pairwise_codes, masked = False): 
+    def model(self, independent_codes, pairwise_codes, baseline): 
         """
         Args: 
             independent_codes: the result of encoding my sequence encoder to independent codes --- these are tensors--- N seqs times A amino acids time L positions (shape_independet_weights) etc. 
@@ -466,169 +470,43 @@ class create_in_silico_model:
         """
         ans1 = np.einsum('ijk, jk -> i', independent_codes, self.independent_weights) 
         ans2 = np.einsum('ijk, jk -> i', pairwise_codes, self.pairwise_weights)
-        return ans1 + ans2 
+        return baseline + ans1 + ans2 
         
     def plot_weights(self): 
         """
         Plotting functions 
         """
-        I_samples = np.ravel(self.raw_independent_weights) 
+        # weights 
+        I_samples = np.ravel(self.independent_weights) 
         GRID_SIZE = 1000
         x = np.linspace(np.min(I_samples), np.max(I_samples), GRID_SIZE)
         plt.figure() 
         plt.plot(x, self.Prob_I.pdf()(x))
         _ = plt.hist(I_samples, density=True, bins = 50)        
-        plt.title('Distribution of unmaked independent weights') 
+        plt.title('Distribution of independent weights') 
 
-        P_samples = np.ravel(self.raw_pairwise_weights) 
+        P_samples = np.ravel(self.pairwise_weights) 
         x = np.linspace(np.min(P_samples), np.max(P_samples), GRID_SIZE)
         plt.figure() 
         plt.plot(x, self.Prob_P.pdf()(x))
         _ = plt.hist(P_samples, density=True, bins = 50)        
-        plt.title('Distribution of unmasked pairwise weights') 
-        # weights 
+        plt.title('Distribution of pairwise weights') 
         plt.figure() 
-        plt.imshow(self.independent_weights, vmin = -1, vmax = 1, cmap = 'RdBu') 
-        _  = plt.xticks(range(self.mutated_region_length), rotation = 90)
-        _  = plt.yticks(range(len(AMINO_ACIDS)), AMINO_ACIDS)
+        plt.imshow(self.independent_weights, vmin = -1, vmax = 1, cmap = 'RdBu', interpolation = 'None') 
+        _  = plt.yticks(range(len(self.feature_names_independent)), self.feature_names_independent)
+        _  = plt.xticks(range(self.shape_independent_weights[1]))
         plt.title("Independent weights") 
         plt.colorbar() 
         plt.figure(figsize = (5, 70))
-        plt.imshow(self.pairwise_weights, vmin = -1, vmax = 1, cmap = 'RdBu', aspect = 'auto') 
-        _  = plt.xticks(range(len(self.pos_product)), self.pos_product, rotation = 90)
-        _  = plt.yticks(range(len(self.amino_product)), self.amino_product)
+        plt.imshow(self.pairwise_weights, vmin = -1, vmax = 1, cmap = 'RdBu', aspect = 'auto', interpolation = 'None') 
+        _  = plt.yticks(range(len(self.feature_names_pairwise)), self.feature_names_pairwise)
+        _  = plt.xticks(range(self.shape_pairwise_weights[1]))
         plt.title("Pairwise weights") 
         #plt.colorbar
 
 
 
 
-#######################################################################################################
-
-def create_masked_features(mutated_region_length, mutation_probs_variable_region_dict): 
-    """
-    A common fucntion used my in silico modle and fitting model to create features
-    Args:
-        mutated_region_length: length of the mutated protein 
-        mutated_probs_variable_region_dict: pass the dict of mutation probs (this is generated by SOLD matrix class, attribute of dict is called mutation_probs_variable_region_indexed) 
-            example:
-            {0: {'D': 0.05, 'K': 0.85, 'M': 0.05, 'Y': 0.05},
-             1: {'C': 0.05, 'G': 0.05, 'I': 0.05, 'P': 0.85},
-             2: {'F': 0.05, 'N': 0.05, 'R': 0.85, 'Y': 0.05},
-             3: {'G': 0.05, 'I': 0.05, 'L': 0.85, 'Q': 0.05},
-             4: {'A': 0.05, 'E': 0.05, 'R': 0.05, 'W': 0.85},
-             5: {'A': 0.05, 'D': 0.05, 'I': 0.85, 'K': 0.05}}
-            where the keys are the index of the mutated regions and the values are dicts of probs of each amino acid
-    """
-    amino_product = [np.asarray(x) for x in product(AMINO_ACIDS, AMINO_ACIDS)]
-    pos_product = [np.asarray(x) for x in combinations(np.arange(mutated_region_length), 2)]
-
-    independent_mask = np.zeros((len(AMINO_ACIDS), mutated_region_length)) 
-    pairwise_mask = np.zeros((len(amino_product), len(pos_product)))
-
-    feature_names_independent = np.empty((len(AMINO_ACIDS), mutated_region_length)).astype(str) 
-    feature_names_pairwise = np.empty((len(amino_product), len(pos_product))).astype(str)  
-
-    for k,v in mutation_probs_variable_region_dict.items(): 
-        for s,t in v.items(): 
-            amino_index = AMINO_ACIDS.index(s)
-            independent_mask[amino_index, k] = 1 
-            feature_names_independent[amino_index, k] = str(k) + '-' + str(s) 
-
-    for i, a in enumerate(amino_product): 
-        for j, k in enumerate(pos_product): 
-            if (a[0] in mutation_probs_variable_region_dict[k[0]]) &  (a[1] in mutation_probs_variable_region_dict[k[1]]): 
-                pairwise_mask[i,j] = 1
-                feature_names_pairwise[i, j] = str(k[0]) + '-' + str(a[0]) + ':' + str(k[1]) + '-' + str(a[1]) 
-
-    independent_mask = independent_mask.astype(bool)
-    pairwise_mask = pairwise_mask.astype(bool) 
-
-    feature_names_independent = np.ravel(feature_names_independent[independent_mask])
-    feature_names_pairwise = np.ravel(feature_names_pairwise[pairwise_mask])    
-        
-    return independent_mask, pairwise_mask, feature_names_independent, feature_names_pairwise
-
-#######################################################################################################
-
-
-def _create_constraint_mat(pairwise_feature_names, independent_feature_names): 
-    """
-    Internal function to create constrained mat
-
-    There are two kinds of constraints 
-    sum_i J_ij = 0 
-    sum_j J_ij = 0 for every feature i, j 
-
-    I also need to create constraint mat for sum over every position of all features is zero 
-    so sum_a h_ia where now h_ia is the weight for ith position and amino acid a 
-    This implies h'_j  := sum_i J_ij also must be zero when we sum this over the the position p 
-    where j = (p,a), the position and amino acid together make the feature
-    Args: 
-        pairwise_feature_names: This are the names of the pariwsie features 
-        inpdendent_feature_names: names of independent features 
-    """
-
-    split_pair_feature_names = np.asarray([a.split(':') for a in pairwise_feature_names]) 
-    L = len(pairwise_feature_names)
-    constrained_mat_J = [] 
-    for i in independent_feature_names: #circle through every indepednent feature 
-        local_vec = np.zeros(L) 
-        inds1 = np.flatnonzero(split_pair_feature_names[:, 0] == i) 
-        inds2 = np.flatnonzero(split_pair_feature_names[:, 1] == i) 
-        inds = np.concatenate((inds1, inds2)) 
-        local_vec[inds] = 1
-        constrained_mat_J.append(local_vec) 
-
-    # Now I need to impose constraints to take care on not having any rank 1 terms in JIj, ab where rank 1 would be J_ij,ab = H_ij \outer K_ab 
-    # Need to impose summation of J_ij,ab ovee either ab or ij is zero---see notes 
-    full_split_feature_names  = np.asarray([re.split(':' + "|" + '-', a) for a in pairwise_feature_names]) 
-    pos_pairs = np.unique(full_split_feature_names[:,[0,2]], axis = 0)
-    amino_pairs = np.unique(full_split_feature_names[:,[1,3]], axis = 0)
-
-    for p in pos_pairs: 
-        print(p) 
-        local_vec = np.zeros(L)
-        inds = np.all(full_split_feature_names[:, [0,2]] == p, axis = 1) 
-        print(full_split_feature_names[inds]) 
-        local_vec[inds] = 1
-        constrained_mat_J.append(local_vec) 
-
-    # for a in amino_pairs:
-    #     print(a) 
-    #     local_vec = np.zeros(L)
-    #     inds = np.all(full_split_feature_names[:, [1,3]] == a, axis = 1) 
-    #     print(full_split_feature_names[inds]) 
-
-    #     local_vec[inds] = 1
-    #     constrained_mat_J.append(local_vec) 
-    
-    ## now indepdent ones... 
-    pos_feat_independent = np.asarray([a.split('-') for a in independent_feature_names])
-    K = len(independent_feature_names) 
-    pos = np.unique(pos_feat_independent[:,0])
-    constrained_mat_H = [] 
-    
-    for i in pos:
-        local_vec = np.zeros(K)
-        inds = np.flatnonzero(pos_feat_independent[:,0] == i) 
-        local_vec[inds] = 1
-        constrained_mat_H.append(local_vec) 
-
-
-    constrained_mat_H = np.asarray(constrained_mat_H) 
-    constrained_mat_J = np.asarray(constrained_mat_J)
-
-    # Now I need to concatenate all of this -- and add zeros for the h features and J features 
-    temp = np.zeros((len(constrained_mat_J), K))
-    c_mat_1 = np.hstack((temp, constrained_mat_J))
-
-    num_pairwise = len(pairwise_feature_names)
-    temp = np.zeros((len(constrained_mat_H),L))
-    c_mat_2 = np.hstack((constrained_mat_H, temp))
-    cmat = np.vstack((c_mat_1, c_mat_2)) 
-    print(np.shape(cmat))
-    return cmat
 
 #######################################################################################################
 
