@@ -27,7 +27,7 @@ AMINO_ACIDS = list(IUPACData.protein_letters)
 
 #######################################################################################################
 
-def create_synthetic_SOLD_matrix(num_mutated, length_of_protein, parent_prob = 0.85, mut_probs = None): 
+def create_synthetic_SOLD_matrix(num_mutated, length_of_protein, parent_prob = None, mut_probs = None): 
     """
     Creates an artifical SOLD matrix 
     Args: 
@@ -43,14 +43,14 @@ def create_synthetic_SOLD_matrix(num_mutated, length_of_protein, parent_prob = 0
     mutated_pos = np.sort(np.random.choice(range(length_of_protein), num_mutated, replace = False))
     print("Random mutaed positions", mutated_pos) 
     random_muts = [] 
-    for m in mut_probs: 
-        assert np.sum(m) + parent_prob == 1
+    for i, m in enumerate(mut_probs): 
+        assert np.sum(m) + parent_prob[i] == 1
     mut_dict = defaultdict(dict) 
     for j,i in enumerate(mutated_pos): 
         draws = list(AMINO_ACIDS) 
         draws.remove(parent[i]) 
         to_draw = np.random.choice(draws, len(mut_probs[j]), replace = False) 
-        mut_dict[int(i)] = {parent[i]: parent_prob} 
+        mut_dict[int(i)] = {parent[i]: parent_prob[j]} 
         for k,l in enumerate(to_draw):
             mut_dict[int(i)].update({str(l): mut_probs[j][k]})
     sold_mat = np.zeros((len(AMINO_ACIDS), length_of_protein))
@@ -374,24 +374,27 @@ class Encoding_basics:
         # Create a code dict for every position 
         parent = ['']*len(mutation_probs_variable_region_dict) 
         self.independent_code_mapper = {} 
-        single_address = defaultdict(list) 
-        self.positions = [] 
+        self.positions = np.sort(list(self.mutation_probs_variable_region_dict.keys()))
+        
         for k, v in mutation_probs_variable_region_dict.items(): 
             code_length = len(v) - 1 
             parent_base = max(v, key=v.get)
             bases = [a for a in v.keys() if a!= parent_base] 
             mapper = create_code(bases) 
             mapper.update({parent_base: np.zeros(code_length)}) 
-            parent[k] = max(v, key=v.get)
+            indx = list(self.positions).index(k) 
+            parent[indx] = max(v, key=v.get)
             self.independent_code_mapper[k] = mapper 
-            self.positions.append(k) 
         self.parent = ''.join(parent)
-        self.positions = np.sort(self.positions)
+        self.pos_product = [np.asarray(x) for x in combinations(self.positions, 2)] 
+        # trying to keep this general... can handle positions that are not indexed by mutation position, but parent protein position, SHH! 
+
         # Now I have all the independent codes 
         #Lets go through all the positions are create the pairwise codes  
 
-        code_size = defaultdict(int) 
+        code_size = defaultdict(int)
         pair_bases = defaultdict(list) 
+
         for i, j in self.pos_product: 
             for a, b in self.amino_product: 
                 if (a in self.independent_code_mapper[i]) and (b in self.independent_code_mapper[j]): 
@@ -400,36 +403,43 @@ class Encoding_basics:
 
         self.pairwise_code_mapper = {}
         for i, j in self.pos_product: 
-            parent_pair = self.parent[i] + self.parent[j] 
-            temp = pair_bases[str(i) + ':' + str(j)]
-            code_length = len(temp) - 1 
-            bases = [a for a in temp if a!= parent_pair] 
+            ind1 = list(self.positions).index(i)
+            ind2 = list(self.positions).index(j)
+            parent_pair = self.parent[ind1] + self.parent[ind2] 
+            code_length = code_size[str(i) + ':' + str(j)] - 1 
+            bases = [a for a in pair_bases[str(i) + ':' + str(j)] if a!= parent_pair] 
             mapper = create_code(bases) 
             mapper.update({parent_pair: np.zeros(code_length)}) 
             self.pairwise_code_mapper[str(i) + ':' + str(j)] = mapper 
 
-        # Now I need to get the order consistent and create "matrix" --- list of list really because the code sizes are diffferent 
-        self.feature_names_independent = []
-        # again get the order consistent from AMINO order 
-        self.independent_codes_list = [] 
-        for s in self.positions: 
-            for a in AMINO_ACIDS: 
-                if a in self.independent_code_mapper[s]: 
-                    self.feature_names_independent.append(str(s) + '-' + a) 
-                    self.independent_codes_list.append(self.independent_code_mapper[s][a])
-        
-        
-        self.feature_names_pairwise = [] 
-        self.pairwise_codes_list = []            
+
+        # encode the parent sequence to get the code structure
+        self.feature_names_independent = [] 
+        self.encode_parent_independent = []
+        for i, s in enumerate(self.positions): 
+            self.encode_parent_independent.append(self.independent_code_mapper[s][self.parent[i]])
+
+        self.feature_names_independent = [] 
+        for s,v in self.independent_code_mapper.items():
+            for k in v.keys(): 
+                self.feature_names_independent.append(str(s) + '-' + k) 
+                
+        self.encode_parent_pairwise = []
         for i, j in self.pos_product: 
-            for a, b in self.amino_product: 
-                if (a in self.independent_code_mapper[i]) and (b in self.independent_code_mapper[j]): 
-                    name = str(i) + '-' + str(a) + ':' + str(j) + '-' + str(b) 
-                    self.feature_names_pairwise.append(name) 
-                    self.pairwise_codes_list.append(self.pairwise_code_mapper[str(i) + ':' + str(j)][str(a) + str(b)])
-        
-        self.code_length_independent = np.sum([len(code) for code in self.independent_codes_list]) 
-        self.code_length_pairwise = np.sum([len(code) for code in self.pairwise_codes_list]) 
+            ind1 = list(self.positions).index(i)
+            ind2 = list(self.positions).index(j)
+            a = parent[ind1]
+            b = parent[ind2]
+            self.encode_parent_pairwise.append(self.pairwise_code_mapper[str(i) + ':' + str(j)][str(a) + str(b)])    
+
+        self.feature_names_pairwise = [] 
+        for s,v in self.pairwise_code_mapper.items():
+            for k in v.keys(): 
+                self.feature_names_pairwise.append(str(s) + '-' + k) 
+
+     
+        self.code_length_independent = np.sum([len(code) for code in self.encode_parent_independent]) 
+        self.code_length_pairwise = np.sum([len(code) for code in self.encode_parent_pairwise]) 
         self.number_of_features = self.code_length_independent + self.code_length_pairwise
 
 
@@ -458,22 +468,31 @@ class Sequence_encoder_simplex(Encoding_basics):
             array_of_seq = np.asarray(list(seq))
             assert len(seq) == self.mutated_region_length, "length mismatch of protein seq and attributes"
             
-            local_code_I = [x*0 for x in self.independent_codes_list] # initialize to zero 
-            for i in range(self.mutated_region_length): 
-                feature = str(i) + '-' + array_of_seq[i] 
-                index = list(self.feature_names_independent).index(feature) 
-                local_code_I[index] = self.independent_codes_list[index] 
+            local_code_I = [] 
+            for i, s in enumerate(self.positions): 
+                local_code_I.append(self.independent_code_mapper[s][array_of_seq[i]])
             independent_codes.append(local_code_I)   
             
-            local_code_J = [x*0 for x in self.pairwise_codes_list]
-            for j, pos in enumerate(self.pos_product): 
-                # need to find the index of amino_acid pairs 
-                amino_pairs = array_of_seq[pos]
-                feature = str(pos[0]) + '-' + amino_pairs[0] + ':' + str(pos[1]) + '-' + amino_pairs[1]
-                index = list(self.feature_names_pairwise).index(feature)
-                local_code_J[index] = self.pairwise_codes_list[index]
+            local_code_J = []
+            for i, j in self.pos_product: 
+                ind1 = list(self.positions).index(i)
+                ind2 = list(self.positions).index(j)
+                a = array_of_seq[ind1]
+                b = array_of_seq[ind2]
+                local_code_J.append(self.pairwise_code_mapper[str(i) + ':' + str(j)][str(a) + str(b)])     
             pairwise_codes.append(local_code_J) 
-        return independent_codes, pairwise_codes
+
+        flatten_independent = [] 
+        for ind in independent_codes:
+            flatten_independent.append([item for x in ind for item in x])
+        flatten_independent = np.asarray(flatten_independent) 
+
+        flatten_pairwise = [] 
+        for ind in pairwise_codes:
+            flatten_pairwise.append([item for x in ind for item in x])
+        flatten_pairwise = np.asarray(flatten_pairwise) 
+        
+        return independent_codes, pairwise_codes, flatten_independent, flatten_pairwise
 
 
 #######################################################################################################
@@ -500,9 +519,9 @@ class Create_in_silico_model(Encoding_basics):
             
         """
         # independent params pdf default --- 
-        I_defaults = {'rho':[0.2, 0.2], 'sparse_pdf_names': ['norm', 'norm'], 'noise_sigma' : 0.01, 'sparse_params': [{'loc': 1, 'scale': 0.2}, {'loc': -1, 'scale': 0.2}]} 
+        I_defaults = {'rho':[0.45, 0.45], 'sparse_pdf_names': ['norm', 'norm'], 'noise_sigma' : 0.01, 'sparse_params': [{'loc': 1, 'scale': 0.2}, {'loc': -1, 'scale': 0.2}]} 
         #pairwise params pdf default ---
-        P_defaults = {'rho':[0.2, 0.2], 'sparse_pdf_names': ['norm', 'norm'], 'noise_sigma' : 0.01, 'sparse_params': [{'loc': 0.75, 'scale': 0.2}, {'loc': -0.75, 'scale': 0.2}]} 
+        P_defaults = {'rho':[0.45, 0.45], 'sparse_pdf_names': ['norm', 'norm'], 'noise_sigma' : 0.01, 'sparse_params': [{'loc': 0.75, 'scale': 0.2}, {'loc': -0.75, 'scale': 0.2}]} 
 
         super().__init__(mutation_probs_variable_region_dict) 
 
@@ -521,27 +540,22 @@ class Create_in_silico_model(Encoding_basics):
         self.independent_weights, _ = self.Prob_I.samples(self.code_length_independent)
         self.Prob_P = Create_mixture(**self.pairwise_params)
         self.pairwise_weights, _ = self.Prob_P.samples(self.code_length_pairwise)
-    
-    def model(self, independent_codes, pairwise_codes): 
+        
+    def model(self, flatten_independent, flatten_pairwise = None): 
         """
         Args: 
-            independent_codes: the result of encoding my sequence encoder to independent codes --- these are tensors--- N seqs times A amino acids time L positions (shape_independet_weights) etc. 
+            independent_codes: the result of encoding my sequence encoder to independent codes --- these are tensors--- \
+            N seqs times A amino acids time L positions (shape_independet_weights) etc. 
             pairwise_codes: similar 
             masked: ignore the weights of independent and pairwise positions that are not variable! 
         """
-        flatten_independent = [] 
-        for ind in independent_codes:
-            flatten_independent.append([item for x in ind for item in x])
-        flatten_independent = np.asarray(flatten_independent) 
-
-        flatten_pairwise = [] 
-        for ind in pairwise_codes:
-            flatten_pairwise.append([item for x in ind for item in x])
-        flatten_pairwise = np.asarray(flatten_pairwise) 
+        assert np.shape(flatten_independent)[1] == self.code_length_independent, "Code size mismatch" 
+        
         ans1 = np.einsum('ij, j -> i', flatten_independent, self.independent_weights) 
-        ans2 = np.einsum('ij, j -> i', flatten_pairwise, self.pairwise_weights) 
-        #ans1 = np.einsum('ijk, jk -> i', independent_codes, self.independent_weights) 
-        #ans2 = np.einsum('ijk, jk -> i', pairwise_codes, self.pairwise_weights)
+        ans2 = 0 
+        if flatten_pairwise is not None: 
+            assert np.shape(flatten_pairwise)[1] == self.code_length_pairwise, "Code size mismatch" 
+            ans2 = np.einsum('ij, j -> i', flatten_pairwise, self.pairwise_weights) 
         return ans1 + ans2 
         
     def plot_weights(self): 
@@ -616,12 +630,10 @@ class Fitting_model:
         """
         self.mutation_probs_variable_region_dict = mutation_probs_variable_region_dict
         self.mutated_region_length = len(mutation_probs_variable_region_dict) 
-
-        self.independent_mask, self.pairwise_mask, self.feature_names_independent, self.feature_names_pairwise = \
-        create_masked_features(self.mutated_region_length, self.mutation_probs_variable_region_dict) 
+        self.encoder = Sequence_encoder_simplex(self.mutation_probs_variable_region_dict)
 
 
-    def fit(self, seqs, activities, lambda_I = 0.01, lambda_P = 0.1): 
+    def fit(self, seqs, activities, lambda_I = 0.001, lambda_P = 0.001, fit = 'independent'): 
         """
         Fit seqs to their activities 
         The seqs are ONLY variable regions seqs concatenated! No point trying to fit regions that don't vary in the SOLD experiment! 
@@ -630,31 +642,67 @@ class Fitting_model:
             activities: vector of real values 
         """
         assert len(seqs) == len(activities), "Seqs (X) and activities (y) should be same length vectors"
-        self.encoder = sequence_encoder(self.mutated_region_length)
-        I_encodings, P_encodings = self.encoder.encode_seqs(seqs)
+        independent_codes, pairwise_codes, flatten_independent, flatten_pairwise = self.encoder.encode_seqs(seqs)
+
         # Now I need to select the features that are actually explored in the SOLD matrix---both for independent and pairwise 
         # first fit the independent parameters so that the pairwise paramaters are truly only pariwise, and cannot be explained away by independent by reparameterization 
-        
-        self.features = np.asarray([np.concatenate((np.ravel(indt[self.independent_mask]), \
-                                                    np.ravel(pair[self.pairwise_mask]))) for indt, pair in zip(I_encodings, P_encodings)]) 
-        self.independent_indices = np.arange(len(self.feature_names_independent)) # first few are independent features 
-        self.number_of_features = len(self.feature_names_independent) + len(self.feature_names_pairwise)
-        self.pairwise_indices = np.arange(len(self.feature_names_independent), self.number_of_features)  # the second set is pariwise features 
 
-        # I need to perform a constrained optimization
+        self.independent_indices = np.arange(self.encoder.code_length_independent) # first few are independent features 
+        self.pairwise_indices = np.arange(self.encoder.code_length_independent, self.encoder.number_of_features)  # the second set is pariwise features 
 
-        self.constraints = _create_constraint_mat(self.feature_names_pairwise, self.feature_names_independent) 
-        beta = cp.Variable(self.number_of_features)
-        constraints = self.constraints @ beta == np.zeros(len(self.constraints)) 
+        if fit == 'independent':
+            self.features = flatten_independent
+            beta = cp.Variable(self.encoder.code_length_independent)
+            penalty = lambda_I * cp.norm1(beta)
+            #Define the problem and solve
+            
+        elif fit == 'both': 
+            self.features = np.concatenate([flatten_independent, flatten_pairwise], axis = 1)
+            beta = cp.Variable(self.encoder.number_of_features)
+            penalty = (lambda_I * cp.norm1(beta[self.independent_indices]) + lambda_P * cp.norm1(beta[self.pairwise_indices]))
         
         loss = cp.sum_squares(activities - self.features @ beta)    
-        penalty = (lambda_I * cp.norm1(beta[self.independent_indices]) +
-                   lambda_P * cp.norm1(beta[self.pairwise_indices]))
         objective = cp.Minimize(loss + penalty)
-        # Define the problem and solve
-        problem = cp.Problem(objective, [constraints])
+        problem = cp.Problem(objective)
         problem.solve()        
         predicted_activities = np.dot(self.features, beta.value) 
-        return beta.value, predicted_activities  
+        return beta.value, predicted_activities
         
-    
+        # self.features = np.concatenate([flatten_independent, flatten_pairwise], axis = 1)
+        
+        # self.independent_indices = np.arange(self.encoder.code_length_independent) # first few are independent features 
+        # self.pairwise_indices = np.arange(self.encoder.code_length_independent, self.encoder.number_of_features)  # the second set is pariwise features 
+
+        # # I need to perform a constrained optimization
+        # beta = cp.Variable(self.encoder.number_of_features)
+        
+        # loss = cp.sum_squares(activities - self.features @ beta)    
+        # penalty = (lambda_I * cp.norm1(beta[self.independent_indices]) +
+        #            lambda_P * cp.norm1(beta[self.pairwise_indices]))
+        # objective = cp.Minimize(loss + penalty)
+        # # Define the problem and solve
+        # problem = cp.Problem(objective)
+        # problem.solve()        
+        # predicted_activities = np.dot(self.features, beta.value) 
+        #return beta.value, predicted_activities  
+
+        # self.features = np.concatenate([flatten_independent, flatten_pairwise], axis = 1)
+
+        # beta_I = cp.Variable(self.encoder.code_length_independent)
+        # loss = cp.sum_squares(activities - flatten_independent @ beta_I)    
+        # penalty = lambda_I * cp.norm1(beta_I) 
+        # objective = cp.Minimize(loss + penalty)
+        # # Define the problem and solve
+        # problem = cp.Problem(objective)
+        # problem.solve()    
+        # residual = activities - np.dot(flatten_independent, beta_I.value) 
+
+        # beta_P = cp.Variable(self.encoder.code_length_pairwise)
+        # loss = cp.sum_squares(residual - flatten_pairwise @ beta_P)    
+        # penalty = lambda_P * cp.norm1(beta_P) 
+        # objective = cp.Minimize(loss + penalty)
+        # # Define the problem and solve
+        # problem = cp.Problem(objective)
+        # problem.solve()    
+
+        
