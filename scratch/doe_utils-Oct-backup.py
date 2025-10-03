@@ -366,6 +366,7 @@ class Encoding_basics:
 
         # All mutations and encodings are relative to parent 
         # get product aminos and pos products 
+        self.amino_product = [''.join(x) for x in product(AMINO_ACIDS, AMINO_ACIDS)]
         self.pos_product = [np.asarray(x) for x in combinations(np.arange(self.mutated_region_length), 2)]
 
 
@@ -403,7 +404,6 @@ class Encoding_basics:
         self.parent = ''.join(parent)
         self.pos_product = [np.asarray(x) for x in combinations(self.positions, 2)] 
         # trying to keep this general... can handle positions that are not indexed by mutation position, but parent protein position, SHH! 
-        self.amino_product = [''.join(x) for x in product(AMINO_ACIDS, AMINO_ACIDS)]
 
         # Now I have all the independent codes 
         #Lets go through all the positions are create the pairwise codes  
@@ -413,16 +413,9 @@ class Encoding_basics:
 
         for i, j in self.pos_product: 
             for a, b in self.amino_product: 
-                # I need to make sure that only one of the aminos are not parent which has zero weight, and therefore the single muation is 
-                #not really pairwise interaction, but captures in individual 
-                if (a in self.independent_code_mapper[i]) and (b in self.independent_code_mapper[j]):
-                    ind1 = list(self.positions).index(i)
-                    ind2 = list(self.positions).index(j)
-                    test1 = a == self.parent[ind1]
-                    test2 = b == self.parent[ind2]
-                    if not (test1 ^ test2): 
-                        code_size[str(i) + ':' + str(j)] += 1 
-                        pair_bases[str(i) + ':' + str(j)].append(a + b)
+                if (a in self.independent_code_mapper[i]) and (b in self.independent_code_mapper[j]): 
+                    code_size[str(i) + ':' + str(j)] += 1 
+                    pair_bases[str(i) + ':' + str(j)].append(a + b)
 
         self.pairwise_code_mapper = {}
         self.pairwise_positional_code_length = {} 
@@ -436,16 +429,8 @@ class Encoding_basics:
             bases = [a for a in pair_bases[str(i) + ':' + str(j)] if a!= parent_pair] 
             mapper = create_code(bases) 
             mapper.update({parent_pair: np.zeros(code_length)}) 
-            for a, b in self.amino_product: 
-                # I need to assign zero vectors to all th esingle mutation pairwise 
-                if (a in self.independent_code_mapper[i]) and (b in self.independent_code_mapper[j]):
-                    ind1 = list(self.positions).index(i)
-                    ind2 = list(self.positions).index(j)
-                    test1 = a == self.parent[ind1]
-                    test2 = b == self.parent[ind2]
-                    if (test1 ^ test2): 
-                        mapper.update({str(a) + str(b): np.zeros(code_length)}) 
             self.pairwise_code_mapper[str(i) + ':' + str(j)] = mapper 
+
 
         # encode the parent sequence to get the code structure
         self.feature_names_independent = [] 
@@ -464,8 +449,7 @@ class Encoding_basics:
             ind2 = list(self.positions).index(j)
             a = parent[ind1]
             b = parent[ind2]
-            if str(a) + str(b) in self.pairwise_code_mapper[str(i) + ':' + str(j)]: 
-                self.encode_parent_pairwise.append(self.pairwise_code_mapper[str(i) + ':' + str(j)][str(a) + str(b)])    
+            self.encode_parent_pairwise.append(self.pairwise_code_mapper[str(i) + ':' + str(j)][str(a) + str(b)])    
 
         self.feature_names_pairwise = [] 
         for s,v in self.pairwise_code_mapper.items():
@@ -543,8 +527,7 @@ class Sequence_encoder_simplex(Encoding_basics):
                 ind2 = list(self.positions).index(j)
                 a = array_of_seq[ind1]
                 b = array_of_seq[ind2]
-                if (str(a) + str(b)) in self.pairwise_code_mapper[str(i) + ':' + str(j)]:
-                    local_code_J.append(self.pairwise_code_mapper[str(i) + ':' + str(j)][str(a) + str(b)])     
+                local_code_J.append(self.pairwise_code_mapper[str(i) + ':' + str(j)][str(a) + str(b)])     
             pairwise_codes.append(local_code_J) 
 
         flatten_independent = [] 
@@ -577,7 +560,6 @@ def _fix_pairwise_weights(pairwise_weights, pairwise_constraints):
     while (delta > TOLERANCE) and (num_iter < MAXITER):
         num_iter += 1 
         for v in pairwise_constraints.astype(bool):
-            print(v)
             new_weights[v] -= np.mean(new_weights[v]) 
         delta = root_mean_squared_error(old_weights, new_weights)
         old_weights = np.copy(new_weights)
