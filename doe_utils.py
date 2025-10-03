@@ -402,11 +402,14 @@ class Encoding_basics:
                     pair_bases[str(i) + ':' + str(j)].append(a + b)
 
         self.pairwise_code_mapper = {}
+        self.pairwise_positional_code_length = {} 
+        
         for i, j in self.pos_product: 
             ind1 = list(self.positions).index(i)
             ind2 = list(self.positions).index(j)
             parent_pair = self.parent[ind1] + self.parent[ind2] 
             code_length = code_size[str(i) + ':' + str(j)] - 1 
+            self.pairwise_positional_code_length[str(i) + ':' + str(j)] = code_length 
             bases = [a for a in pair_bases[str(i) + ':' + str(j)] if a!= parent_pair] 
             mapper = create_code(bases) 
             mapper.update({parent_pair: np.zeros(code_length)}) 
@@ -437,11 +440,40 @@ class Encoding_basics:
             for k in v.keys(): 
                 self.feature_names_pairwise.append(str(s) + '-' + k) 
 
-     
-        self.code_length_independent = np.sum([len(code) for code in self.encode_parent_independent]) 
+        # Need to create an adress for all the weights 
+        self.pair_position_weights_name = defaultdict(list) 
+        for k,v in self.pairwise_code_mapper.items(): 
+            self.pair_position_weights_name[k] = ['']*self.pairwise_positional_code_length[k]
+            for s,t in v.items(): 
+                if np.any(t): 
+                    self.pair_position_weights_name[k][np.flatnonzero(t)[0]] = s
+
+        # flattened names
+
+        self.flattened_pair_position_weights_name = [] 
+        for i, j in self.pos_product: 
+            ind1 = list(self.positions).index(i)
+            ind2 = list(self.positions).index(j)
+            self.flattened_pair_position_weights_name.extend([str(i) + ':' + str(j) + '-' + a[0] + ':' + a[1] for a in self.pair_position_weights_name[str(i) + ':' + str(j)]])
+        
         self.code_length_pairwise = np.sum([len(code) for code in self.encode_parent_pairwise]) 
+        self.flattened_pair_position_weights_name = np.asarray(self.flattened_pair_position_weights_name)
+        self.code_length_independent = np.sum([len(code) for code in self.encode_parent_independent]) 
         self.number_of_features = self.code_length_independent + self.code_length_pairwise
 
+        # find the constraint matrix \sum_{jb} J_ia, jb = 0 ... etc. 
+        split_names = np.asarray([re.split(r'[:-]', s) for s in self.flattened_pair_position_weights_name])
+
+        constraints = [] 
+        for p in self.feature_names_independent:
+            pos, base = p.split('-') 
+            inds1 = np.flatnonzero((split_names[:, 0] == pos) & (split_names[:, 2] == base))
+            inds2 = np.flatnonzero((split_names[:, 1] == pos) & (split_names[:, 3] == base))  
+            v = np.zeros(self.code_length_pairwise)
+            v[np.concatenate([inds1, inds2])] = 1 
+            constraints.append(v)
+        self.pairwise_constraints = np.asarray(constraints)
+        
 
 #######################################################################################################
 
@@ -497,6 +529,27 @@ class Sequence_encoder_simplex(Encoding_basics):
 
 #######################################################################################################
 
+def _fix_pairwise_weights(pairwise_weights, pairwise_constraints): 
+    """
+    Make sure J_{ia, jb} summed over ia or jb is zero so that it cannot be explained away by h_ia and h_jb --- 
+    the pairwise weights cannot be explained by independent weights 
+    """
+    TOLERANCE = 1e-12
+    MAXITER = 1000000
+    num_iter = 0 
+    
+    delta = np.inf
+    new_weights = np.copy(pairwise_weights)
+    old_weights = np.copy(new_weights)
+    while (delta > TOLERANCE) and (num_iter < MAXITER):
+        num_iter += 1 
+        for v in pairwise_constraints.astype(bool):
+            new_weights[v] -= np.mean(new_weights[v]) 
+        delta = root_mean_squared_error(old_weights, new_weights)
+        old_weights = np.copy(new_weights)
+
+    return new_weights, np.dot(pairwise_constraints, new_weights) 
+        
 class Create_in_silico_model(Encoding_basics): 
     """
     Create an in silico model for simulation with independent and pairwise contributions 
@@ -539,7 +592,10 @@ class Create_in_silico_model(Encoding_basics):
         self.Prob_I = Create_mixture(**self.independent_params)
         self.independent_weights, _ = self.Prob_I.samples(self.code_length_independent)
         self.Prob_P = Create_mixture(**self.pairwise_params)
-        self.pairwise_weights, _ = self.Prob_P.samples(self.code_length_pairwise)
+        pairwise_weights, _ = self.Prob_P.samples(self.code_length_pairwise)
+        # fix the J_ia,jb problem -- ill-poses -> well-posed 
+        self.pairwise_weights, _ = _fix_pairwise_weights(pairwise_weights, self.pairwise_constraints)
+        
         
     def model(self, flatten_independent, flatten_pairwise = None): 
         """
@@ -605,8 +661,8 @@ def plot_encoding_pairwise(Encoder, code_mat, seq, figsize = (10,50)):
     _ = plt.xticks(range(Encoder.shape_pairwise_weights[1]))
     plt.title(seq)
     plt.xlabel('weights for simplex encoding') 
+    
 #######################################################################################################
-
 
 class Fitting_model: 
     """
@@ -632,6 +688,13 @@ class Fitting_model:
         self.mutated_region_length = len(mutation_probs_variable_region_dict) 
         self.encoder = Sequence_encoder_simplex(self.mutation_probs_variable_region_dict)
 
+    def create_constraint_mat(self): 
+        """
+        Create the constraint mat for optimization 
+        """
+        temp = np.zeros((len(self.encoder.pairwise_constraints), self.code_length_independent))
+        ans = np.hstack((temp, self.encoder.pairwise_constraints))
+        return ans
 
     def fit(self, seqs, activities, lambda_I = 0.001, lambda_P = 0.001, fit = 'independent'): 
         """
@@ -655,15 +718,18 @@ class Fitting_model:
             beta = cp.Variable(self.encoder.code_length_independent)
             penalty = lambda_I * cp.norm1(beta)
             #Define the problem and solve
+            loss = cp.sum_squares(activities - self.features @ beta)    
+            objective = cp.Minimize(loss + penalty)
+            problem = cp.Problem(objective)
             
         elif fit == 'both': 
             self.features = np.concatenate([flatten_independent, flatten_pairwise], axis = 1)
             beta = cp.Variable(self.encoder.number_of_features)
             penalty = (lambda_I * cp.norm1(beta[self.independent_indices]) + lambda_P * cp.norm1(beta[self.pairwise_indices]))
-        
-        loss = cp.sum_squares(activities - self.features @ beta)    
-        objective = cp.Minimize(loss + penalty)
-        problem = cp.Problem(objective)
+            constraints = self.create_constraint_mat() 
+            loss = cp.sum_squares(activities - self.features @ beta)    
+            objective = cp.Minimize(loss + penalty)
+            problem = cp.Problem(objective, [constraints])
         problem.solve()        
         predicted_activities = np.dot(self.features, beta.value) 
         return beta.value, predicted_activities
