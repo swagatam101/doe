@@ -503,7 +503,8 @@ class Encoding_basics:
             inds2 = np.flatnonzero((split_names[:, 1] == pos) & (split_names[:, 3] == base))  
             v = np.zeros(self.code_length_pairwise)
             v[np.concatenate([inds1, inds2])] = 1 
-            constraints.append(v)
+            if np.any(v): 
+                constraints.append(v)
         self.pairwise_constraints = np.asarray(constraints)
         
 
@@ -577,7 +578,6 @@ def _fix_pairwise_weights(pairwise_weights, pairwise_constraints):
     while (delta > TOLERANCE) and (num_iter < MAXITER):
         num_iter += 1 
         for v in pairwise_constraints.astype(bool):
-            print(v)
             new_weights[v] -= np.mean(new_weights[v]) 
         delta = root_mean_squared_error(old_weights, new_weights)
         old_weights = np.copy(new_weights)
@@ -769,41 +769,6 @@ class Fitting_model:
         predicted_activities = np.dot(self.features, beta.value) 
         return beta.value, predicted_activities
         
-        # self.features = np.concatenate([flatten_independent, flatten_pairwise], axis = 1)
         
-        # self.independent_indices = np.arange(self.encoder.code_length_independent) # first few are independent features 
-        # self.pairwise_indices = np.arange(self.encoder.code_length_independent, self.encoder.number_of_features)  # the second set is pariwise features 
-
-        # # I need to perform a constrained optimization
-        # beta = cp.Variable(self.encoder.number_of_features)
-        
-        # loss = cp.sum_squares(activities - self.features @ beta)    
-        # penalty = (lambda_I * cp.norm1(beta[self.independent_indices]) +
-        #            lambda_P * cp.norm1(beta[self.pairwise_indices]))
-        # objective = cp.Minimize(loss + penalty)
-        # # Define the problem and solve
-        # problem = cp.Problem(objective)
-        # problem.solve()        
-        # predicted_activities = np.dot(self.features, beta.value) 
-        #return beta.value, predicted_activities  
-
-        # self.features = np.concatenate([flatten_independent, flatten_pairwise], axis = 1)
-
-        # beta_I = cp.Variable(self.encoder.code_length_independent)
-        # loss = cp.sum_squares(activities - flatten_independent @ beta_I)    
-        # penalty = lambda_I * cp.norm1(beta_I) 
-        # objective = cp.Minimize(loss + penalty)
-        # # Define the problem and solve
-        # problem = cp.Problem(objective)
-        # problem.solve()    
-        # residual = activities - np.dot(flatten_independent, beta_I.value) 
-
-        # beta_P = cp.Variable(self.encoder.code_length_pairwise)
-        # loss = cp.sum_squares(residual - flatten_pairwise @ beta_P)    
-        # penalty = lambda_P * cp.norm1(beta_P) 
-        # objective = cp.Minimize(loss + penalty)
-        # # Define the problem and solve
-        # problem = cp.Problem(objective)
-        # problem.solve()    
 
         
